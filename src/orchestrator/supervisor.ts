@@ -259,18 +259,23 @@ export class Supervisor {
     await runTurn(deps, ws, agent, this.systemPrompt(ws, roleCfg, agent), handoffPrompt);
 
     const successor = this.store.createAgent(ws.id, agent.role, agent.model, agent.generation + 1, agent.id);
-    // Successor must see the handoff but not the entire backlog. Take the FIRST message the
-    // predecessor posted during the handoff turn: handoffPrompt asks for the brief first and
-    // task status notes second, and bus_update_task's note is itself a BROADCAST from the same
-    // agent (bus/server.ts:97) with a higher id. So neither end of its full history works —
-    // the first message overall rewinds to the start of its working life (3-55 messages, up to
-    // 54k chars replayed), and the last message is usually a trailing task note, which puts the
-    // brief BELOW the cursor and hands the successor a one-line note instead of its handoff.
-    const posted = this.store
-      .unseenMessages({ ...successor, last_seen_message_id: beforeHandoff })
-      .filter((m) => m.from_agent === agent.name);
-    const cursor = posted.length > 0 ? posted[0].id - 1 : this.maxMessageId(ws.id);
-    this.store.updateAgent(successor.id, { last_seen_message_id: cursor });
+    // The successor inherits everything posted from the moment the handoff turn began, and
+    // nothing older. Three other anchors were tried here and all lose messages:
+    //
+    //  - the predecessor's FIRST message ever — rewinds to the start of its working life,
+    //    replaying 3-55 messages (up to 54k chars) into every new generation.
+    //  - its LAST message — bus_update_task posts its note as a BROADCAST from the same agent
+    //    (bus/server.ts:97) with a HIGHER id than the brief, and handoffPrompt asks for
+    //    brief-then-notes. So this lands ABOVE the brief and drops it: measured 9/9 real
+    //    successions. Masked because a trailing note usually repeats some state.
+    //  - its first message DURING the handoff turn — delivers the brief, but silently drops
+    //    anything ANOTHER agent posted between the turn starting and that first post. That
+    //    window is a whole turn wide, and those messages are lost to the role entirely: the
+    //    predecessor never saw them (they postdate its prompt) and the successor skips them.
+    //
+    // `beforeHandoff` has none of those failure modes, and needs no ability to recognise the
+    // brief by content nor any reliance on prompt ordering holding.
+    this.store.updateAgent(successor.id, { last_seen_message_id: beforeHandoff });
     this.store.updateAgent(agent.id, { status: 'retired' });
     this.store.addEvent(ws.id, successor.id, successor.name, 'succession', {
       from: agent.name,
