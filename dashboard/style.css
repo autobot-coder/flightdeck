@@ -934,6 +934,24 @@ select option { background: var(--solid); color: var(--text); }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+/* The card deliberately clamps to 3 lines; the whole description lives in the task modal. */
+.task-card { cursor: pointer; }
+.task-card:hover { border-color: var(--cyan); }
+.task-card:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+.task-detail-meta { margin-bottom: 10px; }
+.task-detail-id { font-size: 11px; color: var(--faint-text); margin-bottom: 12px; }
+.task-detail-desc {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  /* Agents write these with hard-wrapped paragraphs, code paths and indented evidence
+     blocks, so preserve the newlines — but wrap long lines rather than scrolling sideways. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-family: inherit;
+}
 
 .task-meta {
   display: flex;

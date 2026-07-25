@@ -1075,7 +1075,8 @@ function taskCardHTML(t) {
     '<option value="' + s + '"' + (s === t.status ? ' selected' : '') + '>' +
     esc(STATUS_LABELS[s]) + '</option>').join('');
   return (
-    '<div class="task-card prio-' + prio + '">' +
+    '<div class="task-card prio-' + prio + '" data-task="' + esc(t.id) + '"' +
+    ' role="button" tabindex="0" title="Open task — read the full description">' +
     '<div class="task-title">' + esc(t.title || '(untitled)') + '</div>' +
     (t.description ? '<div class="task-desc">' + esc(t.description) + '</div>' : '') +
     '<div class="task-meta">' +
@@ -1602,6 +1603,35 @@ function renderAll() {
 /* ==========================================================================
  * Turn-history modal
  * ======================================================================== */
+
+/**
+ * Full task detail. The card clamps its description to 3 lines (style.css .task-desc), which
+ * is fine for a board glance but hides the substance — blocked tickets here run 2-5k chars
+ * and the decision being asked of the owner is usually near the end. Everything is already
+ * on the client, so this needs no fetch.
+ */
+function openTaskModal(taskId) {
+  const t = (state.tasks || []).find((x) => x && x.id === taskId);
+  if (!t) return;
+  $('#modal-title').textContent = t.title || '(untitled)';
+  const prio = Number(t.priority) || 2;
+  const meta = [
+    t.assignee_role ? '<span class="chip chip-role">' + esc(t.assignee_role) + '</span>' : '',
+    '<span class="chip chip-prio p' + prio + '">P' + prio + '</span>',
+    '<span class="chip">' + esc(STATUS_LABELS[t.status] || t.status) + '</span>',
+    t.created_by ? '<span class="chip">from ' + esc(t.created_by) + '</span>' : '',
+    '<span class="task-time mono">' + fmtTime(t.updated_at || t.created_at) + '</span>',
+  ].join('');
+  $('#modal-body').innerHTML =
+    '<div class="task-detail">' +
+    '<div class="task-meta task-detail-meta">' + meta + '</div>' +
+    '<div class="task-detail-id mono">' + esc(t.id) + '</div>' +
+    (t.description
+      ? '<pre class="task-detail-desc">' + esc(t.description) + '</pre>'
+      : '<div class="feed-empty">No description.</div>') +
+    '</div>';
+  $('#modal-backdrop').hidden = false;
+}
 
 async function openAgentModal(agentId) {
   const ws = activeWorkspace();
@@ -2568,6 +2598,19 @@ function bindEvents() {
   $('#board-columns').addEventListener('change', (e) => {
     const sel = e.target.closest('.status-select');
     if (sel && sel.dataset.task) changeTaskStatus(sel.dataset.task, sel.value);
+  });
+  // Click a card to read it in full. Delegated because #board-columns is re-rendered on
+  // every poll. The status dropdown is excluded — changing status must not also open a modal.
+  $('#board-columns').addEventListener('click', (e) => {
+    if (e.target.closest('.status-select')) return;
+    const card = e.target.closest('.task-card');
+    if (card && card.dataset.task) openTaskModal(card.dataset.task);
+  });
+  $('#board-columns').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    if (e.target.closest('.status-select')) return;
+    const card = e.target.closest('.task-card');
+    if (card && card.dataset.task) { e.preventDefault(); openTaskModal(card.dataset.task); }
   });
 
   $('#tab-comms').addEventListener('click', () => { state.tab = 'comms'; renderPanel({ pin: true }); });

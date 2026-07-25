@@ -10,6 +10,8 @@ import type { Store } from '../db.js';
 import type { AgentRow, MissionConfig, RoleConfig, WorkspaceConfig } from '../types.js';
 import { runTurn, type TurnDeps } from './session.js';
 const STALE_TASK_MS = 30 * 60 * 1000;
+/** Cap on unread bus messages injected into one prompt — see the note at the call site. */
+const MAX_UNSEEN_IN_PROMPT = 15;
 
 export class Supervisor {
   /** Set once at boot from preflight, so every turn spawns the CLI the same resolved way. */
@@ -174,10 +176,32 @@ export class Supervisor {
             .filter((t) => t.updated_at > last || Date.now() - t.updated_at > STALE_TASK_MS)
         : [];
 
+    // The lead's job is not only decomposing goals — it triages untriaged work and unblocks
+    // people. Neither is a task assigned to it, so without these queues a lead would wake for
+    // its own todos and nothing else, and the role would be pointless.
+    const inboxQueue =
+      agent.role === 'lead'
+        ? this.store
+            .listTasks(ws.id, 'inbox')
+            .filter((t) => t.updated_at > last || Date.now() - t.updated_at > STALE_TASK_MS)
+        : [];
+    // FRESH ONLY, deliberately: a blocked task wakes the lead once, when it becomes blocked.
+    // If the lead cannot clear it, it is an owner decision and must sit on the board for them
+    // — re-waking on the stale timer would have the lead relitigate it every 30 minutes forever.
+    const blockedQueue =
+      agent.role === 'lead' ? this.store.listTasks(ws.id, 'blocked').filter((t) => t.updated_at > last) : [];
+
+    // Messages are context, never a trigger. Agents narrate progress on every turn, so waking
+    // on unread mail made talking self-sustaining: a broadcast woke two peers, whose replies
+    // woke each other, and an empty board still burned 120 turns in simulation and never
+    // settled. Unread mail is still DELIVERED below — it rides along with the next turn that
+    // real work justifies. To ask something of another role, create a task for them: that
+    // wakes them, and it is visible to the owner on the board.
     if (
-      unseen.length === 0 &&
       todo.length === 0 &&
       reviewQueue.length === 0 &&
+      inboxQueue.length === 0 &&
+      blockedQueue.length === 0 &&
       freshInProgress.length === 0 &&
       staleInProgress.length === 0
     ) {
@@ -186,9 +210,30 @@ export class Supervisor {
 
     const parts: string[] = [];
     if (unseen.length > 0) {
+      // Capped: mail no longer wakes anyone, so a quiet spell can leave a long backlog for
+      // whichever turn comes next. Take the most recent — older narration is the least useful
+      // and the cursor advances past all of it regardless — and say what was dropped rather
+      // than silently truncating.
+      const shown = unseen.slice(-MAX_UNSEEN_IN_PROMPT);
+      const dropped = unseen.length - shown.length;
       parts.push(
-        'New messages on the bus:\n' +
-          unseen.map((m) => `- [${m.id}] from ${m.from_agent} to ${m.to_role ?? 'all'}${m.task_id ? ` (task ${m.task_id})` : ''}: ${m.body}`).join('\n'),
+        `New messages on the bus${dropped > 0 ? ` (${unseen.length} unread, showing the ${shown.length} most recent)` : ''}:\n` +
+          shown.map((m) => `- [${m.id}] from ${m.from_agent} to ${m.to_role ?? 'all'}${m.task_id ? ` (task ${m.task_id})` : ''}: ${m.body}`).join('\n') +
+          (dropped > 0 ? `\n(${dropped} older message(s) not shown — ask on the bus if you need them.)` : ''),
+      );
+    }
+    if (inboxQueue.length > 0) {
+      parts.push(
+        'Untriaged tasks (inbox) — decompose or assign them:\n' +
+          inboxQueue.map((t) => `- [${t.id}] (p${t.priority}) ${t.title}\n  ${t.description.slice(0, 400)}`).join('\n'),
+      );
+    }
+    if (blockedQueue.length > 0) {
+      parts.push(
+        'These tasks just became BLOCKED. Unblock what you can by deciding it or creating a task ' +
+          'for the role that can resolve it. If it genuinely needs the owner, LEAVE it blocked and ' +
+          'make sure its description states plainly what decision you need from them:\n' +
+          blockedQueue.map((t) => `- [${t.id}] ${t.title}`).join('\n'),
       );
     }
     if (todo.length > 0) {
@@ -292,7 +337,21 @@ export class Supervisor {
       `You are "${agent.name}", the ${agent.role} on an autonomous agent team working on the "${ws.name}" project at ${ws.path}. `,
       `${owner} is the human owner, watching a dashboard but not in the loop turn-by-turn — do not wait for them and never ask them questions unless truly blocked (then post a broadcast bus message explaining what you need).`,
       `Your team (each role is a separate agent session — communicate ONLY via the flightdeck-bus tools):\n${team}`,
-      `Protocol: keep the task board truthful (bus_update_task as you start/finish), hand off work by creating tasks for other roles, request review from the reviewer by moving tasks to review status and messaging them, report meaningful progress on the bus directed to the role that needs it (usually lead) — broadcast (no to_role) only decisions or blockers that concern every role, since broadcasts land in every agent's context and on the owner's dashboard; session-handoff briefs and standby notices go to your own role, never to everyone. Prefer small, verifiable steps; run tests/builds to check your work.`,
+      `Protocol — THE BOARD IS THE ONLY WORK QUEUE. You are given a turn because of the board: a task ` +
+        `assigned to you, something in your queue, or work you left unfinished. Messages NEVER cause anyone ` +
+        `to run. They are delivered to whoever is next given a turn for a real reason, so treat the bus as a ` +
+        `place to leave context, not a way to get someone's attention.\n` +
+        `- Keep the board truthful: bus_update_task as you start and finish.\n` +
+        `- TO ASK SOMETHING OF ANOTHER ROLE, CREATE A TASK FOR THEM (bus_create_task with their role). ` +
+        `A message asking them to do something will not reach them in time to matter and may never be acted on.\n` +
+        `- Request review by moving the task to review status; the reviewer's queue picks it up. No message needed.\n` +
+        `- If you are stuck, set the task to blocked and put the WHOLE question in its description: what you tried, ` +
+        `what the options are, and exactly what decision you need. The owner reads blocked tasks on the dashboard, ` +
+        `and the lead is shown it once. A blocker announced only on the bus will be seen by nobody.\n` +
+        `- Say less. Every message you write is read by someone later at a cost, and narrating progress that the ` +
+        `board already shows is pure waste. Report to the lead when there is something a human would want to know; ` +
+        `broadcast (no to_role) almost never — it is charged to every role.\n` +
+        `Prefer small, verifiable steps; run tests/builds to check your work.`,
       `Role brief: ${roleCfg.prompt}`,
     ].join('\n\n');
   }
