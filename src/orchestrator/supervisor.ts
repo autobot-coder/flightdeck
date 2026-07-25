@@ -253,19 +253,23 @@ export class Supervisor {
       '(same role, fresh session) and post it with bus_post_message to your own role. Include: current state of your tasks ' +
       '(ids + where each stands), key decisions made and why, file paths and gotchas discovered, and exact next steps. ' +
       'Update any of your in_progress tasks with a status note. This is your final turn.';
+    // Anchor the successor's cursor on what the predecessor posts from HERE on, not on its
+    // whole history. Captured before the turn so the brief can be identified by position.
+    const beforeHandoff = this.maxMessageId(ws.id);
     await runTurn(deps, ws, agent, this.systemPrompt(ws, roleCfg, agent), handoffPrompt);
 
     const successor = this.store.createAgent(ws.id, agent.role, agent.model, agent.generation + 1, agent.id);
-    // Successor must see the handoff (addressed to its role) but not the entire backlog.
-    // The brief is the predecessor's LAST message — the one it just wrote above. Anchoring
-    // on its FIRST message (as this once did) rewound the cursor to the start of the
-    // predecessor's whole working life, so every generation replayed its predecessor's
-    // entire visible history: measured at 3-55 messages and up to 54k characters of prompt
-    // where one brief was intended.
-    const brief = this.store
-      .unseenMessages({ ...successor, last_seen_message_id: 0 })
+    // Successor must see the handoff but not the entire backlog. Take the FIRST message the
+    // predecessor posted during the handoff turn: handoffPrompt asks for the brief first and
+    // task status notes second, and bus_update_task's note is itself a BROADCAST from the same
+    // agent (bus/server.ts:97) with a higher id. So neither end of its full history works —
+    // the first message overall rewinds to the start of its working life (3-55 messages, up to
+    // 54k chars replayed), and the last message is usually a trailing task note, which puts the
+    // brief BELOW the cursor and hands the successor a one-line note instead of its handoff.
+    const posted = this.store
+      .unseenMessages({ ...successor, last_seen_message_id: beforeHandoff })
       .filter((m) => m.from_agent === agent.name);
-    const cursor = brief.length > 0 ? brief[brief.length - 1].id - 1 : this.maxMessageId(ws.id);
+    const cursor = posted.length > 0 ? posted[0].id - 1 : this.maxMessageId(ws.id);
     this.store.updateAgent(successor.id, { last_seen_message_id: cursor });
     this.store.updateAgent(agent.id, { status: 'retired' });
     this.store.addEvent(ws.id, successor.id, successor.name, 'succession', {
