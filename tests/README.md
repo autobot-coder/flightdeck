@@ -31,6 +31,7 @@ counted as passes — a run that skipped something must not read as full coverag
 | `label-test.cjs` | model label rendering in `dashboard/app.js` |
 | `ownerid-test.mts` | author id/display name derived for the human |
 | `dbmig-test.mts` | `openDb()`'s migration path: a database written by older code keeps every row, and `total_input_tokens` is re-derived from `turns` on **every** open |
+| `db-allowlist-test.mts` | `updateTask`/`updateAgent` interpolate column names, so only allowlisted columns may be written — no mass-assignment, no column-name SQL injection |
 
 ## Two things to know before changing anything here
 

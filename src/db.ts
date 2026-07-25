@@ -101,6 +101,38 @@ function migrate(db: Database.Database) {
   );
 }
 
+/**
+ * Columns each updater may write.
+ *
+ * A SQL identifier cannot be parameterised, so the UPDATE ... SET clauses below interpolate key
+ * names — which means the key set has to be closed. Both updaters used to interpolate whatever
+ * keys the caller passed, and `PATCH /api/tasks/:id` hands over the raw request body, so:
+ *   {"id":"t_HIJACKED"}                 rewrote the primary key and orphaned the original row
+ *   {"workspace_id":"attacker"}         moved a task into a workspace that does not exist
+ *   {"status=(SELECT 1),priority":9}    executed a subquery — column-name SQL injection
+ * The `Partial<…>` on each signature is compile-time only and constrains nothing at runtime.
+ *
+ * Identity and provenance columns are deliberately absent: id, workspace_id, created_at,
+ * created_by, role, name, generation and predecessor_id are set at creation and never updated.
+ * Adding a column here is a decision to let any caller — including an HTTP body — write it.
+ */
+const TASK_UPDATABLE: ReadonlySet<string> = new Set([
+  'status', 'assignee_role', 'priority', 'title', 'description',
+]);
+const AGENT_UPDATABLE: ReadonlySet<string> = new Set([
+  'status', 'model', 'session_id', 'context_tokens',
+  'total_output_tokens', 'total_input_tokens', 'turns', 'last_seen_message_id',
+]);
+
+/**
+ * Keys that are safe to interpolate. Unknown keys are DROPPED rather than thrown on: an extra
+ * key must not be able to turn a write into a 500, and if nothing survives the filter the
+ * callers' `length === 0` guard leaves the row untouched.
+ */
+function updatableKeys(fields: object, allowed: ReadonlySet<string>): string[] {
+  return Object.keys(fields).filter((k) => allowed.has(k));
+}
+
 /** Shared query helpers used by both the supervisor process and the MCP bus process. */
 export class Store {
   constructor(public db: Database.Database) {}
@@ -154,10 +186,12 @@ export class Store {
   }
 
   updateAgent(id: string, fields: Partial<AgentRow>) {
-    const keys = Object.keys(fields) as (keyof AgentRow)[];
+    const keys = updatableKeys(fields, AGENT_UPDATABLE);
     if (keys.length === 0) return;
     const sets = keys.map((k) => `${k} = ?`).join(', ');
-    this.db.prepare(`UPDATE agents SET ${sets} WHERE id = ?`).run(...keys.map((k) => fields[k]), id);
+    this.db
+      .prepare(`UPDATE agents SET ${sets} WHERE id = ?`)
+      .run(...keys.map((k) => fields[k as keyof AgentRow]), id);
   }
 
   createTask(
@@ -185,12 +219,12 @@ export class Store {
   }
 
   updateTask(id: string, fields: Partial<Pick<TaskRow, 'status' | 'assignee_role' | 'priority' | 'title' | 'description'>>) {
-    const keys = Object.keys(fields) as (keyof typeof fields)[];
+    const keys = updatableKeys(fields, TASK_UPDATABLE);
     if (keys.length === 0) return;
     const sets = keys.map((k) => `${k} = ?`).join(', ');
     this.db
       .prepare(`UPDATE tasks SET ${sets}, updated_at = ? WHERE id = ?`)
-      .run(...keys.map((k) => fields[k]), Date.now(), id);
+      .run(...keys.map((k) => fields[k as keyof typeof fields]), Date.now(), id);
   }
 
   listTasks(workspaceId: string, status?: TaskStatus): TaskRow[] {
