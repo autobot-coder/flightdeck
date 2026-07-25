@@ -30,7 +30,7 @@ counted as passes — a run that skipped something must not read as full coverag
 | `catalog-test.ts` | model catalog + the live config's role models |
 | `label-test.cjs` | model label rendering in `dashboard/app.js` |
 | `ownerid-test.mts` | author id/display name derived for the human |
-| `dbmig-test.mts` | `migrate()` preserves row counts on a populated database |
+| `dbmig-test.mts` | `openDb()`'s migration path: a database written by older code keeps every row, and `total_input_tokens` is re-derived from `turns` on **every** open |
 
 ## Two things to know before changing anything here
 
@@ -48,18 +48,27 @@ was malformed and never reached the code under test. Assert the reason, not just
 
 ## Skips are deliberate, not breakage
 
-Three harnesses declare a precondition and skip when it is absent:
+Two harnesses declare a precondition and skip when it is absent:
 
 - `catalog-test.ts`, `ownerid-test.mts` — these check the **operator's real `flightdeck.config.json`**,
   which is gitignored. That is intentional: a clean-clone fixture only ever exercises the default
   path, and running against a real config is what caught a restart-time owner-identity bug. In a
   fresh clone they skip.
-- `dbmig-test.mts` — needs a **populated** database, and the image it was written against is ~14 MB,
-  which does not belong in the repo. Run it with a copy:
-  ```bash
-  cp data/flightdeck.db /tmp/mig.db && FLIGHTDECK_TEST_DB=/tmp/mig.db npm test dbmig
-  ```
-  It refuses to run against a path that looks live, because it opens the file for writing.
+
+`dbmig-test.mts` used to skip too, because it needed a ~14 MB copy of a real database. It now seeds
+its own fixture and always runs. You can still point it at a copy of a real database for the
+row-count checks:
+
+```bash
+cp data/flightdeck.db /tmp/mig.db && FLIGHTDECK_TEST_DB=/tmp/mig.db npm test dbmig
+```
+
+It refuses a path that looks live, because it opens the file for **writing**.
+
+⚠️ If you touch that fixture, keep it seeded with **raw SQL in the pre-migration schema**. Building
+it through today's `Store` would write today's schema, leaving the migration nothing to do — the
+gate would then pass regardless of what `migrate()` contains. Its section A asserts the fixture is
+genuinely historic for exactly this reason; if that assertion fails, everything below it is void.
 
 ## Provenance
 
