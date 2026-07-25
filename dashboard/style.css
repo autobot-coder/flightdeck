@@ -918,7 +918,10 @@ select option { background: var(--solid); color: var(--text); }
   border-left: 2px solid var(--prio);
   border-radius: 2px;
   padding: 9px 10px;
+  /* Opens the detail modal — the card clamps its description to 3 lines (.task-desc). */
+  cursor: pointer;
 }
+.task-card:hover { border-color: var(--cyan); }
 .task-card.prio-1 { --prio: var(--red); }
 .task-card.prio-3 { --prio: var(--faint); }
 
@@ -934,10 +937,8 @@ select option { background: var(--solid); color: var(--text); }
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-/* The card deliberately clamps to 3 lines; the whole description lives in the task modal. */
-.task-card { cursor: pointer; }
-.task-card:hover { border-color: var(--cyan); }
-.task-card:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+/* No .task-card:focus-visible here on purpose — the global :focus-visible rule already
+   styles any tabindex="0" element, and duplicating it dropped the shared --focus-ring. */
 
 .task-detail-meta { margin-bottom: 10px; }
 .task-detail-id { font-size: 11px; color: var(--faint-text); margin-bottom: 12px; }

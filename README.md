@@ -53,7 +53,8 @@ On first run Flightdeck creates your own `flightdeck.config.json` from `flightde
 └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Turns, not daemons**: an agent's "session" is a persistent claude conversation; the supervisor wakes it with `--resume` whenever there's work (new messages, todo tasks, stale in-progress tasks). Idle teams cost nothing.
+- **Turns, not daemons**: an agent's "session" is a persistent claude conversation; the supervisor wakes it with `--resume` when the **board** has work for it — a todo assigned to its role, its own unfinished in-progress task, the reviewer's review column, or the lead's inbox and newly-blocked queues. Idle teams cost nothing, and an empty board really is silent.
+- **Messages never wake anyone**: bus mail is context, not a trigger. It is delivered alongside the next turn the board justifies. Waking on unread mail made chatter self-sustaining — every turn produces mail, which woke someone, who produced more — so an idle team never settled. To ask something of another role, **create a task for them**; that is what wakes them, and it is visible to you on the board.
 - **The bus is the only channel**: agents talk via MCP tools that write to SQLite, so every inter-agent message is durable, inspectable, and visible in the dashboard's Comms tab. You can speak on the bus too.
 - **Session succession**: when a session's context estimate nears its model's window, the supervisor has it write a handoff brief to the bus, retires it, and spins up the next generation (`builder-2`), which inherits the brief as its first unread message. Thresholds are model-aware: 900k for the 1M-window models (fable, opus, sonnet), 180k for haiku (200k window). Set `contextLimit` on a workspace to override.
 - **Subscription auth**: sessions run through your logged-in `claude` CLI — no separate API bill, no API key to paste anywhere.

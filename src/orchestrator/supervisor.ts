@@ -1,17 +1,27 @@
 /**
  * The supervisor is the heartbeat of Flightdeck. Every tick it looks at each running
- * workspace and gives idle agents a turn when they have work: unread bus messages, todo tasks
- * for their role, or a stale in_progress task. Near the context limit it retires the session
- * gracefully: the agent writes a handoff brief onto the bus, and a fresh generation picks it up.
+ * workspace and gives idle agents a turn.
+ *
+ * THE BOARD IS THE ONLY WAKE SIGNAL. An agent runs because of task state — a todo assigned to
+ * it, its own unfinished in_progress work, the reviewer's `review` column, or the lead's
+ * `inbox`/newly-`blocked` queues. Bus messages NEVER wake anyone: they are delivered to
+ * whichever turn real work justifies. Waking on unread mail made talking self-sustaining,
+ * since every turn also produces mail, and an idle board still burned turns indefinitely.
+ * See pendingWork() for the queue definitions, which are the authoritative statement of this.
+ *
+ * Near the context limit it retires the session gracefully: the agent writes a handoff brief
+ * onto the bus, and a fresh generation picks it up.
  */
 import { contextLimitFor, ownerIdFrom, ownerNameFrom } from '../config.js';
 import type { CliResolution } from '../preflight.js';
 import type { Store } from '../db.js';
-import type { AgentRow, MissionConfig, RoleConfig, WorkspaceConfig } from '../types.js';
+import type { AgentRow, MissionConfig, RoleConfig, TaskRow, TaskStatus, WorkspaceConfig } from '../types.js';
 import { runTurn, type TurnDeps } from './session.js';
 const STALE_TASK_MS = 30 * 60 * 1000;
 /** Cap on unread bus messages injected into one prompt — see the note at the call site. */
 const MAX_UNSEEN_IN_PROMPT = 15;
+/** Cap on review-queue tasks listed in one prompt — same purpose, same budget. */
+const MAX_REVIEW_IN_PROMPT = 10;
 
 export class Supervisor {
   /** Set once at boot from preflight, so every turn spawns the CLI the same resolved way. */
@@ -153,43 +163,47 @@ export class Supervisor {
     const last = this.lastTurnAt.get(agent.id) ?? 0;
     if (Date.now() - last < this.config.tickSeconds * 1000) return null; // one turn per tick per agent
 
-    const unseen = this.store.unseenMessages(agent);
-    const todo = this.store
-      .listTasks(ws.id, 'todo')
-      .filter((t) => t.assignee_role === agent.role);
-    const inProgress = this.store
-      .listTasks(ws.id, 'in_progress')
-      .filter((t) => t.assignee_role === agent.role);
-    const freshInProgress = inProgress.filter((t) => t.updated_at > last);
-    const staleInProgress = inProgress.filter((t) => Date.now() - t.updated_at > STALE_TASK_MS);
+    // Two wake predicates, named once. `isFresh` = changed since this agent last ran;
+    // `isStale` = untouched long enough that somebody should look again. Which of the two a
+    // queue uses IS the policy, so every queue below states its choice explicitly rather than
+    // encoding it in whichever characters happened to be typed.
+    const isFresh = (t: TaskRow) => t.updated_at > last;
+    const isStale = (t: TaskRow) => Date.now() - t.updated_at > STALE_TASK_MS;
 
-    // Tasks in `review` are the reviewer's work regardless of assignee_role, which records
-    // who IMPLEMENTED the task — moving it to review is how the protocol hands it over.
-    // Nothing dispatched this status before, so the review column was unreachable: a task
-    // moved there could only ever be picked up if somebody happened to message the reviewer
-    // about it, and 17 had silently accumulated. Surfaced on the same fresh-or-stale terms
-    // as in_progress, so a reviewer that clears its queue is not re-woken every tick.
-    const reviewQueue =
-      agent.role === 'reviewer'
-        ? this.store
-            .listTasks(ws.id, 'review')
-            .filter((t) => t.updated_at > last || Date.now() - t.updated_at > STALE_TASK_MS)
-        : [];
+    /** A status queue that can wake `role`. `null` role means "whoever the task is assigned to". */
+    const queue = (role: string | null, status: TaskStatus, wakesOn: (t: TaskRow) => boolean) => {
+      // Role check before the query: a non-matching role must not pay for the DB round-trip.
+      if (role !== null && agent.role !== role) return [];
+      return this.store
+        .listTasks(ws.id, status)
+        .filter((t) => (role === null ? t.assignee_role === agent.role : true) && wakesOn(t));
+    };
 
-    // The lead's job is not only decomposing goals — it triages untriaged work and unblocks
-    // people. Neither is a task assigned to it, so without these queues a lead would wake for
-    // its own todos and nothing else, and the role would be pointless.
-    const inboxQueue =
-      agent.role === 'lead'
-        ? this.store
-            .listTasks(ws.id, 'inbox')
-            .filter((t) => t.updated_at > last || Date.now() - t.updated_at > STALE_TASK_MS)
-        : [];
-    // FRESH ONLY, deliberately: a blocked task wakes the lead once, when it becomes blocked.
-    // If the lead cannot clear it, it is an owner decision and must sit on the board for them
-    // — re-waking on the stale timer would have the lead relitigate it every 30 minutes forever.
-    const blockedQueue =
-      agent.role === 'lead' ? this.store.listTasks(ws.id, 'blocked').filter((t) => t.updated_at > last) : [];
+    const inProgress = this.store.listTasks(ws.id, 'in_progress').filter((t) => t.assignee_role === agent.role);
+    const freshInProgress = inProgress.filter(isFresh);
+    const staleInProgress = inProgress.filter(isStale);
+
+    // Declared as one list so the wake gate and the prompt render from the SAME source. When
+    // they were mirrored by hand, a queue could be built and rendered but never wake anyone —
+    // which is exactly how 17 review tasks silently accumulated.
+    const queues = {
+      // Your own assigned work. Any todo wakes you; it has not been started yet.
+      todo: queue(null, 'todo', () => true),
+      // `review` is the reviewer's work regardless of assignee_role, which records who
+      // IMPLEMENTED it — moving a task to review is how the protocol hands it over. Nothing
+      // dispatched this status before, so the column was unreachable.
+      review: queue('reviewer', 'review', (t) => isFresh(t) || isStale(t)),
+      // The lead's job is not only decomposing goals — it triages untriaged work and unblocks
+      // people, and neither arrives as a task assigned to it. Without these two the lead would
+      // wake for its own todos and nothing else, and the role would be pointless.
+      inbox: queue('lead', 'inbox', (t) => isFresh(t) || isStale(t)),
+      // FRESH ONLY, deliberately — note the missing isStale. A blocked task wakes the lead once,
+      // when it becomes blocked. If the lead cannot clear it the decision is the owner's, and
+      // re-firing on the stale timer would have the lead relitigate it every 30 minutes forever.
+      blocked: queue('lead', 'blocked', isFresh),
+      freshInProgress,
+      staleInProgress,
+    };
 
     // Messages are context, never a trigger. Agents narrate progress on every turn, so waking
     // on unread mail made talking self-sustaining: a broadcast woke two peers, whose replies
@@ -197,16 +211,13 @@ export class Supervisor {
     // settled. Unread mail is still DELIVERED below — it rides along with the next turn that
     // real work justifies. To ask something of another role, create a task for them: that
     // wakes them, and it is visible to the owner on the board.
-    if (
-      todo.length === 0 &&
-      reviewQueue.length === 0 &&
-      inboxQueue.length === 0 &&
-      blockedQueue.length === 0 &&
-      freshInProgress.length === 0 &&
-      staleInProgress.length === 0
-    ) {
-      return null;
-    }
+    if (Object.values(queues).every((q) => q.length === 0)) return null;
+
+    // Read AFTER the gate: mail no longer decides whether we run, and unseenMessages is a
+    // SELECT * over full bodies. Fetching it first meant every idle tick — now the common
+    // case — loaded and discarded the whole backlog.
+    const unseen = this.store.unseenMessages(agent);
+    const { todo, review: reviewQueue, inbox: inboxQueue, blocked: blockedQueue } = queues;
 
     const parts: string[] = [];
     if (unseen.length > 0) {
@@ -246,7 +257,7 @@ export class Supervisor {
       // Capped so a large backlog cannot rebuild the giant prompts this change exists to
       // prevent; the count is stated rather than silently truncated, and the rest resurface
       // on later turns as this batch is cleared.
-      const shown = reviewQueue.slice(0, 10);
+      const shown = reviewQueue.slice(0, MAX_REVIEW_IN_PROMPT);
       const more = reviewQueue.length - shown.length;
       parts.push(
         `Tasks waiting for your review (${reviewQueue.length} in the review column${more > 0 ? `, showing ${shown.length}` : ''}):\n` +

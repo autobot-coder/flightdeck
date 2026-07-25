@@ -1069,6 +1069,16 @@ function renderBoard() {
   )).join('');
 }
 
+/** Role / priority / timestamp chips — shared by the board card and the task detail modal. */
+function taskChipsHTML(t) {
+  const prio = Number(t.priority) || 2;
+  return (
+    (t.assignee_role ? '<span class="chip chip-role">' + esc(t.assignee_role) + '</span>' : '') +
+    '<span class="chip chip-prio p' + prio + '">P' + prio + '</span>' +
+    '<span class="task-time mono">' + fmtTime(t.updated_at || t.created_at) + '</span>'
+  );
+}
+
 function taskCardHTML(t) {
   const prio = Number(t.priority) || 2;
   const options = STATUSES.map((s) =>
@@ -1079,11 +1089,7 @@ function taskCardHTML(t) {
     ' role="button" tabindex="0" title="Open task — read the full description">' +
     '<div class="task-title">' + esc(t.title || '(untitled)') + '</div>' +
     (t.description ? '<div class="task-desc">' + esc(t.description) + '</div>' : '') +
-    '<div class="task-meta">' +
-    (t.assignee_role ? '<span class="chip chip-role">' + esc(t.assignee_role) + '</span>' : '') +
-    '<span class="chip chip-prio p' + prio + '">P' + prio + '</span>' +
-    '<span class="task-time mono">' + fmtTime(t.updated_at || t.created_at) + '</span>' +
-    '</div>' +
+    '<div class="task-meta">' + taskChipsHTML(t) + '</div>' +
     '<select class="status-select" data-task="' + esc(t.id) + '" aria-label="Task status">' +
     options + '</select>' +
     '</div>'
@@ -1614,14 +1620,11 @@ function openTaskModal(taskId) {
   const t = (state.tasks || []).find((x) => x && x.id === taskId);
   if (!t) return;
   $('#modal-title').textContent = t.title || '(untitled)';
-  const prio = Number(t.priority) || 2;
-  const meta = [
-    t.assignee_role ? '<span class="chip chip-role">' + esc(t.assignee_role) + '</span>' : '',
-    '<span class="chip chip-prio p' + prio + '">P' + prio + '</span>',
-    '<span class="chip">' + esc(STATUS_LABELS[t.status] || t.status) + '</span>',
-    t.created_by ? '<span class="chip">from ' + esc(t.created_by) + '</span>' : '',
-    '<span class="task-time mono">' + fmtTime(t.updated_at || t.created_at) + '</span>',
-  ].join('');
+  // Same chips as the board card, plus the two only the detail view shows.
+  const meta =
+    '<span class="chip">' + esc(STATUS_LABELS[t.status] || t.status) + '</span>' +
+    (t.created_by ? '<span class="chip">from ' + esc(t.created_by) + '</span>' : '') +
+    taskChipsHTML(t);
   $('#modal-body').innerHTML =
     '<div class="task-detail">' +
     '<div class="task-meta task-detail-meta">' + meta + '</div>' +
@@ -2599,18 +2602,19 @@ function bindEvents() {
     const sel = e.target.closest('.status-select');
     if (sel && sel.dataset.task) changeTaskStatus(sel.dataset.task, sel.value);
   });
-  // Click a card to read it in full. Delegated because #board-columns is re-rendered on
-  // every poll. The status dropdown is excluded — changing status must not also open a modal.
+  // Click or Enter/Space on a card to read it in full. Delegated because #board-columns is
+  // re-rendered on every poll. One resolver for both paths so the status-dropdown exclusion
+  // cannot be stated in one and forgotten in the other.
+  const taskCardTarget = (e) =>
+    e.target.closest('.status-select') ? null : e.target.closest('.task-card[data-task]');
   $('#board-columns').addEventListener('click', (e) => {
-    if (e.target.closest('.status-select')) return;
-    const card = e.target.closest('.task-card');
-    if (card && card.dataset.task) openTaskModal(card.dataset.task);
+    const card = taskCardTarget(e);
+    if (card) openTaskModal(card.dataset.task);
   });
   $('#board-columns').addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' && e.key !== ' ') return;
-    if (e.target.closest('.status-select')) return;
-    const card = e.target.closest('.task-card');
-    if (card && card.dataset.task) { e.preventDefault(); openTaskModal(card.dataset.task); }
+    const card = taskCardTarget(e);
+    if (card) { e.preventDefault(); openTaskModal(card.dataset.task); }
   });
 
   $('#tab-comms').addEventListener('click', () => { state.tab = 'comms'; renderPanel({ pin: true }); });

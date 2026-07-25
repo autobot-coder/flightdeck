@@ -28,9 +28,13 @@ const ROLES = [
   { role: 'builder', model: 'sonnet', prompt: 'build' },
 ];
 
+const TMPDIRS: string[] = [];
+process.on('exit', () => { for (const d of TMPDIRS) fs.rmSync(d, { recursive: true, force: true }); });
+
 /** Fresh workspace per case, so one case's board cannot wake the next one's lead. */
 function fixture() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mc-lead-'));
+  TMPDIRS.push(tmp);
   const dbPath = path.join(tmp, 'l.db');
   const store = new Store(openDb(dbPath));
   const ws = { id: 'w', name: 'W', path: tmp, roles: ROLES };
@@ -50,7 +54,6 @@ function fixture() {
   const w = f.work(f.lead);
   check('L1 lead wakes to decompose an owner goal', !!w && w.includes('todo'),
     w ? 'got a prompt with its todo' : 'NOT WOKEN — goals would never be decomposed');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
 }
 
 // 2. Triage — an inbox task belongs to nobody, so only a status-based queue surfaces it.
@@ -60,7 +63,6 @@ function fixture() {
   const w = f.work(f.lead);
   check('L2 lead wakes to triage inbox work', !!w && w.includes(t.id),
     w ? 'inbox task surfaced' : 'NOT WOKEN — untriaged work would sit forever');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
 }
 
 // 3. Unblocking — the blocked task is assigned to the BUILDER, not the lead.
@@ -70,7 +72,6 @@ function fixture() {
   const w = f.work(f.lead);
   check('L3 lead wakes when someone else becomes blocked', !!w && w.includes(t.id),
     w ? 'blocked task surfaced to the lead' : 'NOT WOKEN — nobody would ever unblock anyone');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
 }
 
 // 4. Chatter must not wake anyone — this is the whole point of the change.
@@ -82,11 +83,12 @@ function fixture() {
   for (let i = 0; i < 5; i++) f.store.postMessage(f.ws.id, 'designer-1', null, 'status narration ' + i, null);
   f.store.postMessage(f.ws.id, 'designer-1', 'lead', 'a directed report, still just talk', null);
   f.store.postMessage(f.ws.id, 'designer-1', 'builder', 'a directed report to the builder', null);
-  check('L4 lead does NOT wake for chatter, broadcast or directed', f.work(f.lead) === null,
-    f.work(f.lead) === null ? 'stayed idle with 6 unread' : 'woken by talk alone — the loop is still open');
-  check('L5 builder does NOT wake for chatter either', f.work(f.builder) === null,
-    f.work(f.builder) === null ? 'stayed idle' : 'woken by talk alone');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
+  const leadWork = f.work(f.lead);
+  const builderWork = f.work(f.builder);
+  check('L4 lead does NOT wake for chatter, broadcast or directed', leadWork === null,
+    leadWork === null ? 'stayed idle with 6 unread' : 'woken by talk alone — the loop is still open');
+  check('L5 builder does NOT wake for chatter either', builderWork === null,
+    builderWork === null ? 'stayed idle' : 'woken by talk alone');
 }
 
 // 5. A blocked task the lead could not clear must not re-wake it every stale interval —
@@ -98,18 +100,18 @@ function fixture() {
   (f.sup as any).lastTurnAt.set(f.lead.id, Date.now() + 1000); // lead has now looked at it
   // Age it well past the stale threshold: a stale-eligible queue would re-fire here.
   f.store.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(Date.now() - 60 * 60 * 1000, t.id);
-  check('L7 an unresolved blocked task does NOT re-wake the lead forever', f.work(f.lead) === null,
-    f.work(f.lead) === null ? 'left for the owner, no re-litigation' : 'lead re-woken — 30-minute burn loop');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
+  const afterStale = f.work(f.lead);
+  check('L7 an unresolved blocked task does NOT re-wake the lead forever', afterStale === null,
+    afterStale === null ? 'left for the owner, no re-litigation' : 'lead re-woken — 30-minute burn loop');
 }
 
 // 6. Delivery path intact: a task created FOR another role is what wakes them.
 {
   const f = fixture();
   const t = f.store.createTask(f.ws.id, 'Please do X', 'handed over by the lead', 'lead-1', 'builder', 'todo', 1);
-  check('L8 creating a task for a role wakes that role', !!f.work(f.builder) && f.work(f.builder)!.includes(t.id),
+  const w = f.work(f.builder);
+  check('L8 creating a task for a role wakes that role', !!w && w.includes(t.id),
     'builder picked up the handed-over task');
-  fs.rmSync(f.tmp, { recursive: true, force: true });
 }
 
 console.log(`\n${failures.length === 0 ? 'ALL LEAD CHECKS PASSED' : failures.length + ' FAILURE(S)'}`);
