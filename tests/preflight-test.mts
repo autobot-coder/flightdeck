@@ -58,6 +58,9 @@ ok(
   !/\/Users\/|\/home\/|C:\\\\/.test(JSON.stringify(example)),
   JSON.stringify(example).slice(0, 120),
 );
+// Supplementary to the `example ownerName is blank` assertion above, which is the
+// name-agnostic invariant. This one is a belt-and-braces check on the specific name that
+// leaked into the harnesses once, kept verbatim per the owner's instruction.
 ok('example names nobody', !/manish/i.test(JSON.stringify(example)));
 
 // ------------------------------------------------------------ ensureConfigFile

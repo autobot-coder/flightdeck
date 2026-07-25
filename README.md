@@ -91,7 +91,7 @@ Your settings live in `flightdeck.config.json` in the repo root. It is **gitigno
 | `dbPath` | SQLite file, relative to the repo root. |
 | `maxConcurrentTurns` | Global cap on simultaneous claude sessions. Raise it for more parallelism, lower it to be gentler on your rate limits. |
 | `tickSeconds` | Supervisor scheduling interval. |
-| `cliPath` | Full path to the Claude CLI. Omit to auto-detect. |
+| `cliPath` | Full path to the Claude CLI. Omit to auto-detect. Can also be set per-shell with `FLIGHTDECK_CLI` — see [Environment](#environment). |
 | `models[]` | Optional. The exact models offered in every dropdown, and the allow-list the API validates against. |
 | `workspaces[]` | Your projects: `id`, `name`, `path`, `roles[]` (each `role`, `model`, `prompt`), optional `contextLimit`, `allowedTools`, `extraAllowedTools`. |
 
@@ -112,6 +112,23 @@ Each entry is either the bare `--model` value or `{ "id", "label" }`; the label 
 An agent already running a model you later remove from the catalog keeps it — its dropdown still lists and selects that value, so editing the catalog never silently re-points a live agent.
 
 Changes to `models`, `port`, and `cliPath` take effect on restart. Workspaces and roles apply immediately.
+
+### Environment
+
+Two environment variables are read at startup. Neither is required — both exist for cases the config file cannot cover.
+
+| Variable | Effect |
+|---|---|
+| `FLIGHTDECK_CLI` | Full path to the Claude CLI, same meaning as `cliPath`. Use it when the path belongs to a shell or a machine rather than to your checked-in settings. |
+| `ANTHROPIC_API_KEY` | If set, turns bill to that API key instead of your Claude subscription. Flightdeck never sets or stores it; it only reports which mode is in effect, on the dashboard's setup screen. |
+
+`cliPath` and `FLIGHTDECK_CLI` are the **escape hatch** for a non-standard install: whichever is set is used verbatim and never second-guessed, so auto-detection cannot override it. `cliPath` wins if both are set. This is what to reach for when detection fails — most often on Windows (see [Troubleshooting](#troubleshooting)).
+
+```bash
+FLIGHTDECK_CLI=/opt/claude/bin/claude npm start
+```
+
+The `preflight` block in [`docs/api-contract.md`](docs/api-contract.md) reports which one was used: `source` is `config` for `cliPath`, `env` for `FLIGHTDECK_CLI`.
 
 ---
 
