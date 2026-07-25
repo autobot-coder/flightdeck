@@ -120,19 +120,25 @@ if (havePre) {
   // a guarantee, and undici-types is not even named like a types package.
   for (const k of newlyDev) {
     const dir = join(ROOT, k); // W2 fix: honour the target ROOT, not the live repo
-    let jsCount = -1;
-    if (existsSync(dir)) {
-      const walk = (d: string): string[] => {
-        const out: string[] = [];
-        for (const e of readdirSync(d)) {
-          const p = join(d, e);
-          if (statSync(p).isDirectory()) out.push(...walk(p));
-          else out.push(p);
-        }
-        return out;
-      };
-      jsCount = walk(dir).filter((f) => /\.(js|cjs|mjs)$/.test(f)).length;
+    // C5 is only meaningful against a REAL installed tree. A missing directory used to leave a
+    // `jsCount = -1` sentinel that surfaced as "found -1 js files" — a negative file count
+    // printed as though it were a measurement, under a label claiming the package ships JS.
+    // "not installed" and "installed and ships JS" are different facts and now read differently.
+    if (!existsSync(dir)) {
+      check(`C5 ${k} is installed, so its contents can be checked at all`, false,
+        `${dir} does not exist — C5 needs an installed tree; run npm install, or point ROOT at one`);
+      continue;
     }
+    const walk = (d: string): string[] => {
+      const out: string[] = [];
+      for (const e of readdirSync(d)) {
+        const p = join(d, e);
+        if (statSync(p).isDirectory()) out.push(...walk(p));
+        else out.push(p);
+      }
+      return out;
+    };
+    const jsCount = walk(dir).filter((f) => /\.(js|cjs|mjs)$/.test(f)).length;
     check(`C5 ${k} ships zero runtime JS (safe to omit from production)`,
       jsCount === 0, `found ${jsCount} js files`);
   }
