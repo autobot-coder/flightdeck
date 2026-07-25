@@ -426,19 +426,6 @@ select option { background: var(--solid); color: var(--text); }
 .ld-idle { background: var(--cyan); }
 .ld-retired { background: var(--faint); }
 
-.universe-hint {
-  position: absolute;
-  bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 30;
-  font-size: 12px;
-  letter-spacing: 0.18em;
-  color: var(--faint-text);
-  text-align: center;
-}
-.hint-dim { color: var(--dim); }
-
 /* Hover telemetry card — follows the cursor, flips past 60% width */
 #hover-card {
   position: fixed;
@@ -1623,8 +1610,6 @@ body.panel-collapsed .panel-toggle { border-right: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  /* Parallax is motionOK()-gated in JS; drop its hint clause too */
-  .hint-parallax { display: none; }
 }
 
 /* ==========================================================================
