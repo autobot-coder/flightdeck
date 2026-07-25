@@ -116,7 +116,7 @@ function migrate(db: Database.Database) {
  * created_by, role, name, generation and predecessor_id are set at creation and never updated.
  * Adding a column here is a decision to let any caller — including an HTTP body — write it.
  */
-const TASK_UPDATABLE: ReadonlySet<string> = new Set([
+export const TASK_UPDATABLE: ReadonlySet<string> = new Set([
   'status', 'assignee_role', 'priority', 'title', 'description',
 ]);
 const AGENT_UPDATABLE: ReadonlySet<string> = new Set([

@@ -173,7 +173,35 @@ else
 
   check_req "normal PATCH still accepted"            "200" "" PATCH "$B/api/workspaces/gws" '{"roles":[{"role":"lead","model":"opus"},{"role":"reviewer","model":"opus"}]}'
   check_req "goal on a healthy workspace"            "200" "task_id" POST "$B/api/workspaces/gws/goals" '{"text":"gate goal"}'
+  # Capture the id HERE, immediately after the successful goal — $WORK/body holds only the most
+  # recent response, so reading it after the 404 check below would parse the error instead.
+  TASK_ID=$(node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{process.stdout.write(JSON.parse(s).task_id||"")}catch{process.stdout.write("")}})' < "$WORK/body")
   check_req "goal on an unknown workspace is 404"    "404" "unknown workspace" POST "$B/api/workspaces/nosuch/goals" '{"text":"x"}'
+
+  # ---- t_937774ad: PATCH /api/tasks/:id must not answer 200 to a field it ignores ----
+  # db.ts DROPS keys outside its allowlist, which is the right safety behaviour but silent: a
+  # typo'd field name used to return 200 with an unchanged task. The route now says so. The
+  # allowlist is read from db.ts, so this must NOT reject title/description, which do work.
+  if [ -z "$TASK_ID" ]; then
+    bad "could not capture a task id from the goal response (later PATCH checks skipped)"
+  else
+    ok "captured task id $TASK_ID for the PATCH checks"
+    check_req "PATCH unknown field is 400, not a silent 200" "400" "unknown field(s): boguscol" \
+      PATCH "$B/api/tasks/$TASK_ID" '{"boguscol":"x"}'
+    check_req "  ...and the error names what IS updatable"   "400" "updatable: status" \
+      PATCH "$B/api/tasks/$TASK_ID" '{"boguscol":"x"}'
+    # Regression: everything the data layer allows must still be accepted here. Rejecting
+    # title/description would have narrowed the API, since they reach the DB today.
+    check_req "PATCH status still accepted"                  "200" "" PATCH "$B/api/tasks/$TASK_ID" '{"status":"in_progress"}'
+    check_req "PATCH title still accepted (not narrowed)"    "200" "" PATCH "$B/api/tasks/$TASK_ID" '{"title":"renamed by gate"}'
+    check_req "PATCH description still accepted"             "200" "" PATCH "$B/api/tasks/$TASK_ID" '{"description":"d"}'
+    check_req "PATCH priority still accepted"                "200" "" PATCH "$B/api/tasks/$TASK_ID" '{"priority":3}'
+    # A mixed payload must be refused OUTRIGHT rather than half-applied.
+    check_req "a valid+invalid mix is refused"               "400" "unknown field(s)" \
+      PATCH "$B/api/tasks/$TASK_ID" '{"status":"done","boguscol":"x"}'
+    left=$(curl -s "$B/api/workspaces/gws" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);const t=(j.tasks||[]).find(t=>t.id===process.argv[1]);process.stdout.write(t?t.status:"MISSING")})' "$TASK_ID")
+    check "the refused mix applied NOTHING (status still in_progress)" "in_progress" "$left"
+  fi
 
   # ---- t_2ec3ac4c: every :id route must RESOLVE the workspace, not assume it ----
   # /message stored a row against a nonexistent workspace (unreachable dead data); /pause and

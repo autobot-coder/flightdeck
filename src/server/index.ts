@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import type { Store } from '../db.js';
+import { TASK_UPDATABLE } from '../db.js';
 import type { ConfigStore } from '../config.js';
 import { contextLimitFor, defaultRole, modelCatalogFrom, ownerNameFrom, resolveModel, KNOWN_ROLES } from '../config.js';
 import type { Supervisor } from '../orchestrator/supervisor.js';
@@ -461,8 +462,19 @@ export async function startServer(
     const { id } = req.params as { id: string };
     const task = store.getTask(id);
     if (!task) return reply.code(404).send({ error: 'unknown task' });
-    const body = (req.body ?? {}) as { status?: TaskStatus; assignee_role?: string; priority?: number };
-    store.updateTask(id, body);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    // db.ts DROPS keys outside its allowlist (it interpolates column names, so the set has to be
+    // closed). That is the right safety behaviour, but silently: a client with a typo'd field
+    // name got a 200 and an unchanged task. Say so instead. Checked against the data layer's own
+    // set rather than a copy, so the route cannot narrow what is actually updatable —
+    // `title`/`description` work through here and rejecting them would remove capability.
+    const unknown = Object.keys(body).filter((k) => !TASK_UPDATABLE.has(k));
+    if (unknown.length > 0) {
+      return reply.code(400).send({
+        error: `unknown field(s): ${unknown.join(', ')} — updatable: ${[...TASK_UPDATABLE].join(', ')}`,
+      });
+    }
+    store.updateTask(id, body as Parameters<typeof store.updateTask>[1]);
     const updated = store.getTask(id)!;
     broadcast({ type: 'task', workspace_id: updated.workspace_id, task: updated });
     void supervisor.tick();
