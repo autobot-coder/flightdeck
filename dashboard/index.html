@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flightdeck</title>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;600;700;800&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- ======================================================================
+       UNIVERSE VIEW — workspaces as planets on a starfield
+       ====================================================================== -->
+  <div id="universe-view" hidden>
+    <!-- Zoomable layer: everything that dives on warp-in (ruling #17). HUD stays outside. -->
+    <div id="universe-layer">
+      <canvas id="star-canvas" aria-hidden="true"></canvas>
+      <div class="nebula" aria-hidden="true"></div>
+
+      <!-- pinned reactor core (dead-center, no parallax) -->
+      <div id="reactor-core" aria-hidden="true">
+        <div class="core-rings">
+          <div class="core-ring-outer"></div>
+          <div class="core-ring-inner"></div>
+          <div class="core-orb"></div>
+        </div>
+        <div class="core-title">Flightdeck</div>
+        <div class="core-sub mono">CORE ONLINE · <span id="core-online">—</span></div>
+      </div>
+
+      <div id="orb-layer"></div>
+      <div id="net-layer" hidden></div>
+    </div>
+
+    <div id="hover-card" hidden></div>
+
+    <header id="hud-bar">
+      <div class="hud-brand">
+        <span class="hud-dot" aria-hidden="true"></span>
+        <span class="hud-name">F.D. Orbital</span>
+        <span class="hud-ver mono">v2.0</span>
+      </div>
+      <div class="hud-spacer"></div>
+      <div class="hud-stats mono">
+        <span>SYS <span class="hud-ok">NOMINAL</span></span>
+        <span>ONLINE <span id="hud-online" class="hud-strong">—</span></span>
+        <span>AGENTS <span id="hud-agents" class="hud-cyan">—</span></span>
+        <span>SPEND <span id="hud-spend" class="hud-gold" title="Total tokens (input + output, incl. cache reads), all workspaces &amp; generations">—</span></span>
+        <span class="conn-status conn-off" title="WebSocket connection">
+          <span class="conn-dot" aria-hidden="true"></span>LINK <span class="conn-label">offline</span>
+        </span>
+      </div>
+      <div class="hud-actions">
+        <button id="metaphor-btn" class="btn" type="button" title="Switch view mode" aria-label="Switch between orbit and network view">⬡ Network</button>
+        <button id="add-ws-btn" class="btn btn-accent" type="button">＋ Deploy</button>
+        <button id="jarvis-btn" class="btn" type="button" title="Ask JARVIS (push to talk)" aria-label="Ask JARVIS" aria-pressed="false">
+          <span class="jarvis-wave" aria-hidden="true"><span></span><span></span><span></span></span>JARVIS
+        </button>
+        <button id="theme-btn" class="btn theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">☀</button>
+      </div>
+    </header>
+
+    <div id="jarvis-transcript" class="jarvis-transcript" aria-live="polite" hidden>
+      <div class="jarvis-eyebrow mono">◈ JARVIS</div>
+      <div class="jarvis-text"></div>
+    </div>
+
+    <div id="orbit-legend" class="agent-legend mono">
+      <span class="legend-title">ORBITING AGENTS</span>
+      <span class="legend-item"><span class="legend-dot ld-working" aria-hidden="true"></span>WORKING</span>
+      <span class="legend-item"><span class="legend-dot ld-idle" aria-hidden="true"></span>IDLE</span>
+      <span class="legend-item"><span class="legend-dot ld-retired" aria-hidden="true"></span>RETIRED</span>
+    </div>
+
+    <div class="universe-hint mono">
+      HOVER A WORLD TO SCAN · CLICK TO ENTER<span class="hint-dim hint-parallax"> · MOVE CURSOR FOR PARALLAX</span>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       WORKSPACE DETAIL VIEW — rail | board | comms + command bar
+       ====================================================================== -->
+  <div id="detail-view" hidden>
+
+    <aside id="rail">
+      <div class="rail-identity">
+        <button id="back-btn" class="back-btn mono" type="button">◄ Universe</button>
+        <div id="hdr-ws-name" class="hdr-ws-name">—</div>
+        <div id="hdr-ws-path" class="hdr-ws-path mono"></div>
+        <div class="rail-status-row">
+          <span id="ws-status" class="ws-status ws-paused mono"><span class="ws-status-dot" aria-hidden="true"></span><span id="ws-status-label">—</span></span>
+          <button id="pause-btn" class="btn btn-sm" type="button" disabled>❚❚ Pause</button>
+        </div>
+        <span class="conn-status conn-off rail-conn mono" title="WebSocket connection">
+          <span class="conn-dot" aria-hidden="true"></span>LINK <span class="conn-label">offline</span>
+        </span>
+      </div>
+      <div class="rail-crew">
+        <h2 class="region-title">Team · <span id="team-count">0</span> agents</h2>
+        <div id="agent-cards" class="agent-cards"></div>
+      </div>
+      <div class="rail-foot">
+        <button id="settings-btn" class="btn rail-settings" type="button" disabled>⚙ Settings</button>
+        <button id="delete-btn" class="btn btn-danger" type="button" disabled aria-label="Decommission workspace">✕</button>
+        <button id="theme-btn-rail" class="btn theme-toggle" type="button" title="Toggle theme" aria-label="Toggle theme">☀</button>
+      </div>
+    </aside>
+
+    <main id="board" aria-label="Task board">
+      <div id="directive-strip">
+        <span class="directive-eyebrow mono">◈ ACTIVE DIRECTIVE</span>
+        <span id="directive-text" class="directive-text">—</span>
+      </div>
+      <div class="board-inner">
+        <h2 class="region-title">Task board</h2>
+        <div id="board-columns" class="board-columns"></div>
+      </div>
+    </main>
+
+    <aside id="right-panel">
+      <div id="panel-resize" class="panel-resize" role="separator" tabindex="0"
+           aria-orientation="vertical" aria-label="Resize panel"
+           aria-valuemin="280" aria-valuemax="960" aria-valuenow="340"
+           title="Drag to resize · double-click to reset"></div>
+      <button id="panel-toggle" class="panel-toggle" type="button"
+              aria-expanded="true" aria-label="Collapse panel">
+        <span id="panel-chevron" class="panel-chevron" aria-hidden="true">›</span>
+        <span id="unread-badge" class="unread-badge" hidden>0</span>
+      </button>
+      <div class="panel-content">
+        <div class="panel-tabs" role="tablist">
+          <button id="tab-comms" class="panel-tab active" type="button" role="tab" aria-selected="true">Comms</button>
+          <button id="tab-activity" class="panel-tab" type="button" role="tab" aria-selected="false">Activity</button>
+        </div>
+        <div id="panel-feed" class="panel-feed"></div>
+        <form id="msg-form" class="msg-form">
+          <div id="mention-popup" class="mention-popup" role="listbox" aria-label="Mention a role" hidden></div>
+          <input id="msg-input" type="text" autocomplete="off" role="combobox"
+                 aria-expanded="false" aria-controls="mention-popup" aria-autocomplete="list"
+                 placeholder="Message the team…" disabled>
+          <button class="btn" type="submit" disabled>Send</button>
+        </form>
+      </div>
+    </aside>
+
+    <footer id="bottom-bar">
+      <form id="goal-form" class="goal-form">
+        <input id="goal-input" type="text" autocomplete="off"
+               placeholder="Set a directive for this workspace…" disabled>
+        <button class="btn btn-accent" type="submit" disabled>Deploy</button>
+      </form>
+    </footer>
+
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-head">
+        <div id="modal-title" class="modal-title">Turn history</div>
+        <button id="modal-close" class="btn btn-ghost" type="button" aria-label="Close">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="create-backdrop" class="modal-backdrop" hidden>
+    <div class="modal modal-form" role="dialog" aria-modal="true" aria-labelledby="create-title">
+      <div class="modal-head">
+        <div id="create-title" class="modal-title">Deploy workspace</div>
+        <button id="create-close" class="btn btn-ghost" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="create-form" class="modal-body create-body" novalidate>
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input id="create-name" type="text" autocomplete="off" placeholder="My App">
+        </label>
+        <label class="field">
+          <span class="field-label">Path</span>
+          <div class="path-row">
+            <input id="create-path" type="text" autocomplete="off" placeholder="~/Projects/my-app">
+            <button id="browse-btn" class="btn" type="button">Browse</button>
+          </div>
+        </label>
+        <div id="picker-hint" class="picker-hint" hidden>
+          Finder dialog is open — check behind this window if you don't see it.
+        </div>
+        <div id="browser-panel" class="browser-panel" hidden>
+          <div class="browser-head">
+            <span id="browser-path" class="browser-path mono" title="Current folder">…</span>
+            <button id="browser-use" class="btn btn-accent btn-sm" type="button">Use this folder</button>
+          </div>
+          <div id="browser-error" class="form-error" hidden></div>
+          <div id="browser-list" class="browser-list"></div>
+        </div>
+        <fieldset class="field">
+          <legend class="field-label">Roles &amp; models</legend>
+          <div id="create-roles" class="role-rows"></div>
+        </fieldset>
+        <div id="create-error" class="form-error" hidden></div>
+        <div class="modal-actions">
+          <button id="create-cancel" class="btn" type="button">Cancel</button>
+          <button id="create-submit" class="btn btn-accent" type="submit">＋ Deploy workspace</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="settings-backdrop" class="modal-backdrop" hidden>
+    <div class="modal modal-form modal-settings" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-head">
+        <div id="settings-title" class="modal-title">Workspace settings</div>
+        <button id="settings-close" class="btn btn-ghost" type="button" aria-label="Close">✕</button>
+      </div>
+      <form id="settings-form" class="modal-body create-body" novalidate>
+        <div id="settings-loading" class="browser-empty">Loading…</div>
+        <div id="settings-fields" class="settings-fields" hidden>
+          <label class="field">
+            <span class="field-label">Name</span>
+            <input id="settings-name" type="text" autocomplete="off">
+          </label>
+          <label class="field">
+            <span class="field-label">Path</span>
+            <div class="path-row">
+              <input id="settings-path" type="text" autocomplete="off">
+              <button id="settings-browse-btn" class="btn" type="button">Browse</button>
+            </div>
+          </label>
+          <div id="settings-picker-hint" class="picker-hint" hidden>
+            Finder dialog is open — check behind this window if you don't see it.
+          </div>
+          <div id="settings-browser-panel" class="browser-panel" hidden>
+            <div class="browser-head">
+              <span id="settings-browser-path" class="browser-path mono" title="Current folder">…</span>
+              <button id="settings-browser-use" class="btn btn-accent btn-sm" type="button">Use this folder</button>
+            </div>
+            <div id="settings-browser-error" class="form-error" hidden></div>
+            <div id="settings-browser-list" class="browser-list"></div>
+          </div>
+          <label class="field">
+            <span class="field-label">Context limit</span>
+            <input id="settings-context" type="number" min="20000" step="1000"
+                   placeholder="auto (900k / 180k haiku)">
+          </label>
+          <label class="field">
+            <span class="field-label">Extra allowed tools</span>
+            <input id="settings-tools" type="text" autocomplete="off"
+                   placeholder="Comma-separated, e.g. DesignSync, WebFetch">
+          </label>
+          <fieldset class="field">
+            <legend class="field-label">Roles</legend>
+            <div id="settings-roles" class="settings-roles"></div>
+            <div class="settings-add-row">
+              <select id="settings-add-role" aria-label="Add role">
+                <option value="">Add role…</option>
+              </select>
+            </div>
+          </fieldset>
+        </div>
+        <div id="settings-error" class="form-error" hidden></div>
+        <div class="modal-actions">
+          <button id="settings-cancel" class="btn" type="button">Cancel</button>
+          <button id="settings-save" class="btn btn-accent" type="submit" disabled>Save changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="delete-backdrop" class="modal-backdrop" hidden>
+    <div class="modal modal-confirm" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+      <div class="modal-head">
+        <div id="delete-title" class="modal-title">Decommission workspace</div>
+      </div>
+      <div class="modal-body">
+        <p id="delete-text" class="confirm-text"></p>
+        <div id="delete-error" class="form-error" hidden></div>
+        <div class="modal-actions">
+          <button id="delete-cancel" class="btn" type="button">Cancel</button>
+          <button id="delete-confirm" class="btn btn-danger-solid" type="button">Decommission</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================================
+       FIRST-RUN SETUP — shown until the CLI is usable and one project exists
+       ====================================================================== -->
+  <div id="setup-backdrop" class="modal-backdrop setup-backdrop" hidden>
+    <div class="modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+      <div class="modal-head">
+        <div id="setup-title" class="modal-title">Welcome to Flightdeck</div>
+        <button id="setup-skip" class="btn btn-ghost" type="button" aria-label="Close setup">✕</button>
+      </div>
+      <div class="modal-body setup-body">
+        <!-- Unsupported runtime. Not a numbered step: the app already booted, so this is a
+             standing warning about the environment rather than something to tick off. -->
+        <div id="setup-node-warn" class="setup-warn" role="alert" hidden>
+          <span class="setup-warn-mark mono" aria-hidden="true">!</span>
+          <div>
+            <div class="setup-warn-title">Unsupported Node version</div>
+            <p id="setup-node-note" class="setup-warn-note"></p>
+          </div>
+        </div>
+
+        <p class="setup-lede">
+          Two steps and your first agent team is running. Everything stays on this machine.
+        </p>
+
+        <section class="setup-step" id="setup-step-cli">
+          <div class="setup-step-head">
+            <span class="setup-num mono" aria-hidden="true">1</span>
+            <h3 class="setup-step-title">Connect your Claude subscription</h3>
+            <span id="setup-cli-badge" class="setup-badge mono">checking…</span>
+          </div>
+          <div id="setup-cli-body" class="setup-step-body"></div>
+        </section>
+
+        <section class="setup-step" id="setup-step-ws">
+          <div class="setup-step-head">
+            <span class="setup-num mono" aria-hidden="true">2</span>
+            <h3 class="setup-step-title">Add your first project</h3>
+            <span id="setup-ws-badge" class="setup-badge mono">waiting</span>
+          </div>
+          <div class="setup-step-body">
+            <p class="setup-note">
+              Point Flightdeck at a folder on your computer. It spins up a team of agents
+              that work inside it — a lead to plan, a builder to write code, a reviewer to check it.
+            </p>
+            <div class="setup-actions">
+              <button id="setup-add-ws" class="btn btn-accent" type="button">＋ Choose a project folder</button>
+            </div>
+          </div>
+        </section>
+
+        <p class="setup-foot mono">
+          Agents run with file and shell access inside the folders you add. Only add projects you
+          trust them to change — and keep them in version control.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

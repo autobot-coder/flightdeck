@@ -1,0 +1,26 @@
+node_modules/
+data/
+*.log
+.DS_Store
+
+# Your own config: absolute paths to your projects, your role prompts, your model pins.
+# Created automatically from flightdeck.config.example.json on first run.
+flightdeck.config.json
+
+# Claude Code's per-machine state: locally approved tool permissions. Not shareable.
+# The tracked .claude/skills/ runbooks are intentionally kept.
+.claude/settings.local.json
+
+# Internal design iteration — not needed to clone, onboard and run, and the mockups
+# seed themselves with the owner's real workspace names. Kept locally, out of the
+# public repo. docs/api-contract.md is deliberately NOT ignored: it documents the HTTP
+# surface and is useful to contributors.
+docs/design/
+docs/start-flightdeck-SKILL-amended.md
+
+# The flightdeck database holds every agent transcript, message and project path.
+# The default dbPath lives under data/ (already ignored), but dbPath is yours to
+# change in flightdeck.config.json — these patterns keep a relocated database private.
+*.db
+*.db-shm
+*.db-wal

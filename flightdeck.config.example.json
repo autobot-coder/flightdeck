@@ -1,0 +1,8 @@
+{
+  "ownerName": "",
+  "port": 4400,
+  "dbPath": "data/flightdeck.db",
+  "maxConcurrentTurns": 3,
+  "tickSeconds": 20,
+  "workspaces": []
+}
