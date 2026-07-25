@@ -154,9 +154,21 @@ function walkSrc(dir: string): string[] {
   }
   return out;
 }
-const srcAll = walkSrc(join(ROOT, 'src')).map((f) => readFileSync(f, 'utf8')).join('\n');
-check('D1 src/ still imports a type from "ws" (the reason the package is needed)',
-  /import\s+type\s*\{[^}]*\}\s*from\s*['"]ws['"]/.test(srcAll));
+// walkSrc used to be called unguarded, so pointing this harness at a PARTIAL tree — a snapshot
+// image holding only package.json and package-lock.json, which this project's history is full of
+// — threw a raw ENOENT stack with ZERO assertions reported. Same shape as the W1 defect fixed
+// above: it exits 1, so run.mjs marks it FAIL rather than PASS and nothing goes falsely green,
+// but the message reads as a broken harness rather than "you pointed me at the wrong tree".
+// Found by reviewer-1 (msg 1529/1530) and guarded the way C5 is.
+const SRC_DIR = join(ROOT, 'src');
+if (!existsSync(SRC_DIR)) {
+  check(`D1 ${SRC_DIR} exists, so the src/ import checks can run at all`, false,
+    'no src/ under the target — D1 inspects it for the "ws" type import; point ROOT at a full tree');
+} else {
+  const srcAll = walkSrc(SRC_DIR).map((f) => readFileSync(f, 'utf8')).join('\n');
+  check('D1 src/ still imports a type from "ws" (the reason the package is needed)',
+    /import\s+type\s*\{[^}]*\}\s*from\s*['"]ws['"]/.test(srcAll));
+}
 check('D2 @types/ws is still DECLARED somewhere (not deleted)',
   '@types/ws' in deps || '@types/ws' in devDeps);
 check('D3 typecheck script still exists and is the gate that needs it',
