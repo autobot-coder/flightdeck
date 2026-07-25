@@ -158,12 +158,48 @@ export async function startServer(
     }
   });
 
+  /**
+   * Create a folder for a brand-new project, so "add a workspace" does not require leaving
+   * the dashboard to make the directory first. Deliberately one level only: `name` must be a
+   * single ordinary folder name, because a separator or `..` would let the caller write
+   * outside the folder they are actually looking at in the browser panel.
+   */
+  app.post('/api/mkdir', async (req, reply) => {
+    const body = (req.body ?? {}) as { parent?: string; name?: string };
+    let parent = (body.parent ?? '').trim() || os.homedir();
+    if (parent.startsWith('~')) parent = path.join(os.homedir(), parent.slice(1));
+    parent = path.resolve(parent);
+
+    const name = (body.name ?? '').trim();
+    if (!name) return reply.code(400).send({ error: 'folder name required' });
+    if (name === '.' || name === '..' || /[/\\]/.test(name) || path.basename(name) !== name) {
+      return reply.code(400).send({ error: 'folder name cannot contain a path separator' });
+    }
+
+    try {
+      if (!fs.statSync(parent).isDirectory()) return reply.code(400).send({ error: `not a folder: ${parent}` });
+    } catch {
+      return reply.code(400).send({ error: `no such folder: ${parent}` });
+    }
+
+    const dir = path.join(parent, name);
+    // Report an existing folder rather than silently handing back someone else's project.
+    if (fs.existsSync(dir)) return reply.code(409).send({ error: `"${name}" already exists here` });
+    try {
+      fs.mkdirSync(dir);
+      return { path: dir };
+    } catch (err) {
+      return reply.code(400).send({ error: `cannot create ${dir}: ${(err as Error).message}` });
+    }
+  });
+
   app.post('/api/workspaces', async (req, reply) => {
     const body = (req.body ?? {}) as {
       name?: string;
       path?: string;
       roles?: (string | { role: string; model?: string })[];
       model?: string;
+      hue?: number;
     };
     const name = body.name?.trim();
     if (!name) return reply.code(400).send({ error: 'name required' });
@@ -201,10 +237,15 @@ export async function startServer(
     const badModel = roleSpecs.find((r) => r.model && !modelIds.includes(r.model));
     if (badModel) return reply.code(400).send({ error: `unknown model "${badModel.model}" for role ${badModel.role}` });
 
+    const hue = normalizeHue(body.hue);
+    if (hue === null) return reply.code(400).send({ error: 'hue must be a number 0-359' });
+
     const ws: WorkspaceConfig = {
       id,
       name,
       path: dir,
+      // Omitted entirely when not chosen, so the client keeps deriving one from the id.
+      ...(hue !== undefined ? { hue } : {}),
       roles: roleSpecs.map((r) => {
         const base = defaultRole(r.role, fallbackModel);
         // grunt's haiku default may not be in a custom catalog — resolve rather than error.
@@ -226,6 +267,7 @@ export async function startServer(
       path: ws.path,
       contextLimit: ws.contextLimit ?? null,
       extraAllowedTools: ws.extraAllowedTools ?? [],
+      hue: ws.hue ?? null,
       roles: ws.roles.map((r) => ({ role: r.role, model: r.model, prompt: r.prompt })),
       known_roles: KNOWN_ROLES,
       known_models: modelCatalog,
@@ -242,7 +284,18 @@ export async function startServer(
       contextLimit?: number | null;
       extraAllowedTools?: string[] | null;
       roles?: { role: string; model?: string; prompt?: string }[];
+      hue?: number | null;
     };
+
+    if (body.hue !== undefined) {
+      // Explicit null means "go back to the id-derived colour".
+      if (body.hue === null) delete ws.hue;
+      else {
+        const hue = normalizeHue(body.hue);
+        if (hue === null || hue === undefined) return reply.code(400).send({ error: 'hue must be a number 0-359' });
+        ws.hue = hue;
+      }
+    }
 
     if (body.path !== undefined) {
       let dir = body.path.trim();
@@ -466,6 +519,18 @@ function eventJson(e: EventRow) {
   return { id: e.id, agent_id: e.agent_id, agent_name: e.agent_name, type: e.type, payload, created_at: e.created_at };
 }
 
+/**
+ * Validate a caller-supplied planet hue. Returns `undefined` for "not specified" (keep the
+ * id-derived default), a wrapped 0-359 integer when valid, and `null` for a value that was
+ * supplied but unusable — so a typo is a 400 rather than a silently ignored field.
+ */
+function normalizeHue(v: unknown): number | undefined | null {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = typeof v === 'string' ? Number(v.trim()) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n)) return null;
+  return ((Math.round(n) % 360) + 360) % 360;
+}
+
 function workspaceJson(store: Store, config: MissionConfig, id: string) {
   const ws = config.workspaces.find((w) => w.id === id)!;
   return {
@@ -473,6 +538,8 @@ function workspaceJson(store: Store, config: MissionConfig, id: string) {
     name: ws.name,
     path: ws.path,
     running: store.isRunning(ws.id),
+    // Absent means "derive from the id" — the client owns that fallback, so don't invent one here.
+    ...(typeof ws.hue === 'number' ? { hue: ws.hue } : {}),
     agents: store.listAgents(ws.id).map((a) => agentJson(a, contextLimit(config, id))),
     task_counts: store.taskCounts(ws.id),
   };

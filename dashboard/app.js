@@ -490,11 +490,75 @@ const NET_POSITIONS = [
   { x: 50, y: 16 }, { x: 12, y: 46 }, { x: 88, y: 46 }, { x: 50, y: 88 }
 ];
 
-// Stable hue per workspace, derived from its id (spec §G).
+// Stable hue per workspace, derived from its id (spec §G) — the fallback when none was chosen.
 function wsHue(id) {
   let h = 0;
   for (const c of String(id)) h = ((h * 31) + c.charCodeAt(0)) >>> 0;
   return h % 360;
+}
+
+// Preset planet colours offered when creating or editing a workspace.
+const HUE_CHOICES = [
+  { hue: 150, label: 'Jade' },
+  { hue: 190, label: 'Cyan' },
+  { hue: 210, label: 'Azure' },
+  { hue: 272, label: 'Violet' },
+  { hue: 320, label: 'Magenta' },
+  { hue: 0, label: 'Crimson' },
+  { hue: 38, label: 'Amber' },
+  { hue: 95, label: 'Lime' },
+];
+
+/**
+ * The workspace's planet colour: an explicitly chosen `hue`, else the id-derived one.
+ * Takes the workspace object rather than an id so an unset hue keeps the old behaviour
+ * for every workspace that predates the picker.
+ */
+function wsHueOf(w) {
+  const h = Number(w && w.hue);
+  return Number.isFinite(h) && h >= 0 && h < 360 ? h : wsHue(w && w.id);
+}
+
+/** Render the swatch radiogroup. `selected` is a hue, or null for "auto (from name)". */
+function renderHuePicker(sel, selected) {
+  const el = $(sel);
+  if (!el) return;
+  const opts = [{ hue: null, label: 'Auto' }].concat(HUE_CHOICES);
+  el.innerHTML = opts
+    .map((o) => {
+      const on = (o.hue === null && selected === null) || o.hue === selected;
+      const style = o.hue === null
+        ? 'background:linear-gradient(135deg,hsl(150 55% 52%),hsl(272 55% 52%),hsl(38 55% 52%));'
+        : 'background:radial-gradient(circle at 36% 32%, hsl(' + o.hue + ' 60% 72%), hsl(' + o.hue + ' 55% 52%) 52%, hsl(' + o.hue + ' 60% 26%) 100%);';
+      return '<button type="button" class="hue-swatch' + (on ? ' is-on' : '') + '"' +
+        ' role="radio" aria-checked="' + (on ? 'true' : 'false') + '"' +
+        ' data-hue="' + (o.hue === null ? '' : o.hue) + '"' +
+        ' title="' + esc(o.label) + '" aria-label="' + esc(o.label) + '"><span style="' + style + '"></span></button>';
+    })
+    .join('');
+}
+
+/** Currently selected hue for a picker: a number, or null for auto. */
+function selectedHue(sel) {
+  const on = document.querySelector(sel + ' .hue-swatch.is-on');
+  if (!on) return null;
+  const v = on.getAttribute('data-hue');
+  return v === '' ? null : Number(v);
+}
+
+/** Click delegation for a swatch row — moves the selection to the clicked swatch. */
+function wireHuePicker(sel) {
+  const el = $(sel);
+  if (!el) return;
+  el.addEventListener('click', (e) => {
+    const btn = e.target.closest('.hue-swatch');
+    if (!btn || !el.contains(btn)) return;
+    for (const b of el.querySelectorAll('.hue-swatch')) {
+      const on = b === btn;
+      b.classList.toggle('is-on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+  });
 }
 
 function wsAgents(w) {
@@ -565,7 +629,7 @@ function wsStatusMeta(w) {
 function orbHTML(w, i) {
   const pos = ORB_POSITIONS[i % ORB_POSITIONS.length];
   const crew = wsLiveAgents(w);
-  const hue = wsHue(w.id);
+  const hue = wsHueOf(w);
   const size = 96 + Math.min(crew.length, 5) * 10;
   const body = Math.round(size * 0.62);
   const moonR = Math.round(body / 2 + 17);
@@ -606,7 +670,7 @@ function orbHTML(w, i) {
 function netNodeHTML(w, i) {
   const pos = NET_POSITIONS[i % NET_POSITIONS.length];
   const agents = wsLiveAgents(w);
-  const hue = wsHue(w.id);
+  const hue = wsHueOf(w);
   const dim = w.running === false;
   const act = workingCount(w);
   const counts = w.task_counts || {};
@@ -1676,6 +1740,7 @@ function openCreateModal() {
   $('#create-name').value = '';
   $('#create-path').value = '';
   buildCreateRoleRows(); // resets checks/models AND picks up a catalog that landed after init
+  renderHuePicker('#create-hue', null); // default: derive the colour from the name
   $('#create-error').hidden = true;
   PICKERS.create.session += 1; // invalidate any pick-folder result from a previous open
   resetPickerUI('create');
@@ -1715,7 +1780,11 @@ async function submitCreateWorkspace() {
   const btn = $('#create-submit');
   btn.disabled = true;
   btn.textContent = 'Deploying…';
-  const r = await request('/api/workspaces', jsonOpts('POST', { name, path, roles }));
+  // Omit `hue` entirely on "Auto" so the server stores nothing and the id-derived colour stands.
+  const hue = selectedHue('#create-hue');
+  const payload = { name, path, roles };
+  if (hue !== null) payload.hue = hue;
+  const r = await request('/api/workspaces', jsonOpts('POST', payload));
   btn.disabled = false;
   btn.textContent = '＋ Deploy workspace';
 
@@ -1740,6 +1809,8 @@ const PICKERS = {
     input: '#create-path', btn: '#browse-btn', hint: '#picker-hint',
     panel: '#browser-panel', pathEl: '#browser-path', list: '#browser-list',
     err: '#browser-error', use: '#browser-use', modal: '#create-backdrop',
+    newBtn: '#browser-new', newRow: '#browser-new-row', newName: '#browser-new-name',
+    newCreate: '#browser-new-create', newCancel: '#browser-new-cancel',
     session: 0, current: null,
     showError: (msg) => showCreateError(msg)
   },
@@ -1748,6 +1819,9 @@ const PICKERS = {
     panel: '#settings-browser-panel', pathEl: '#settings-browser-path',
     list: '#settings-browser-list', err: '#settings-browser-error',
     use: '#settings-browser-use', modal: '#settings-backdrop',
+    newBtn: '#settings-browser-new', newRow: '#settings-browser-new-row',
+    newName: '#settings-browser-new-name', newCreate: '#settings-browser-new-create',
+    newCancel: '#settings-browser-new-cancel',
     session: 0, current: null,
     showError: (msg) => showSettingsError(msg)
   }
@@ -1815,7 +1889,70 @@ function closeBrowser(key) {
   $(p.panel).hidden = true;
   $(p.list).innerHTML = '';
   $(p.err).hidden = true;
+  hideNewFolder(key);
   p.current = null;
+}
+
+/* ---- New folder: create a project directory without leaving the dashboard ---- */
+
+function hideNewFolder(key) {
+  const p = PICKERS[key];
+  const row = $(p.newRow);
+  if (!row) return;
+  row.hidden = true;
+  $(p.newName).value = '';
+}
+
+function showNewFolder(key) {
+  const p = PICKERS[key];
+  const row = $(p.newRow);
+  if (!row || !p.current) return;
+  row.hidden = false;
+  const input = $(p.newName);
+  input.value = '';
+  input.focus();
+}
+
+async function createFolder(key) {
+  const p = PICKERS[key];
+  const name = $(p.newName).value.trim();
+  if (!p.current) return;
+  if (!name) { showBrowserError(key, 'Enter a folder name.'); return; }
+
+  const btn = $(p.newCreate);
+  btn.disabled = true;
+  const r = await request('/api/mkdir', jsonOpts('POST', { parent: p.current, name }));
+  btn.disabled = false;
+
+  if (!r.ok) { showBrowserError(key, r.error); return; }
+  const created = r.data && r.data.path;
+  if (!created) { showBrowserError(key, 'Server did not return the new path.'); return; }
+
+  // Select the folder we just made — creating it is only useful if it becomes the choice.
+  hideNewFolder(key);
+  $(p.input).value = created;
+  await browseTo(key, created);
+}
+
+/** Wire one picker's New folder controls. Enter creates, Escape cancels without closing the modal. */
+function wireNewFolder(key) {
+  const p = PICKERS[key];
+  const btn = $(p.newBtn);
+  if (!btn) return;
+  btn.addEventListener('click', () => showNewFolder(key));
+  $(p.newCancel).addEventListener('click', () => hideNewFolder(key));
+  $(p.newCreate).addEventListener('click', () => createFolder(key));
+  $(p.newName).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); createFolder(key); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideNewFolder(key); }
+  });
+}
+
+function showBrowserError(key, msg) {
+  const p = PICKERS[key];
+  const el = $(p.err);
+  el.textContent = msg;
+  el.hidden = false;
 }
 
 // Collapse the browser and restore the Browse button/hint (unless a native
@@ -1934,6 +2071,7 @@ async function openSettingsModal() {
     (r.data.contextLimit === null || r.data.contextLimit === undefined) ? '' : r.data.contextLimit;
   $('#settings-tools').value =
     Array.isArray(r.data.extraAllowedTools) ? r.data.extraAllowedTools.join(', ') : '';
+  renderHuePicker('#settings-hue', typeof r.data.hue === 'number' ? r.data.hue : null);
   renderSettingsRoles();
   $('#settings-fields').hidden = false;
   $('#settings-save').disabled = false;
@@ -1999,6 +2137,11 @@ function buildSettingsPatch() {
 
   const path = $('#settings-path').value.trim();
   if (path && path !== String(orig.path ?? '')) body.path = path;
+
+  // null clears a stored hue back to the id-derived colour, so send it rather than omitting.
+  const hue = selectedHue('#settings-hue');
+  const origHue = (typeof orig.hue === 'number') ? orig.hue : null;
+  if (hue !== origHue) body.hue = hue;
 
   const ctxRaw = $('#settings-context').value.trim();
   let ctx = null;
@@ -2453,6 +2596,8 @@ function bindEvents() {
   $('#pause-btn').addEventListener('click', togglePause);
   $('#delete-btn').addEventListener('click', openDeleteModal);
   $('#add-ws-btn').addEventListener('click', openCreateModal);
+  // Same action from inside a workspace — the HUD button is scoped to #universe-view.
+  $('#add-ws-btn-rail').addEventListener('click', openCreateModal);
 
   // First-run setup. Dismissal is session-only: a reload re-offers it while setup is
   // still incomplete, so the screen can't be permanently lost to a stray click.
@@ -2532,6 +2677,10 @@ function bindEvents() {
     const row = e.target.closest('.browser-row');
     if (row && row.dataset.path) browseTo('create', row.dataset.path);
   });
+  wireNewFolder('create');
+  wireNewFolder('settings');
+  wireHuePicker('#create-hue');
+  wireHuePicker('#settings-hue');
 
   // Settings modal
   $('#settings-btn').addEventListener('click', openSettingsModal);

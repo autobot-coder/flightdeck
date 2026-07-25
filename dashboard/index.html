@@ -82,7 +82,12 @@
 
     <aside id="rail">
       <div class="rail-identity">
-        <button id="back-btn" class="back-btn mono" type="button">◄ Universe</button>
+        <div class="rail-nav">
+          <button id="back-btn" class="back-btn mono" type="button">◄ Universe</button>
+          <!-- The HUD's ＋ Deploy lives inside #universe-view, so it vanishes the moment you
+               enter a workspace. Same action, reachable from here. -->
+          <button id="add-ws-btn-rail" class="btn btn-sm btn-accent" type="button" title="Add a project">＋ Deploy</button>
+        </div>
         <div id="hdr-ws-name" class="hdr-ws-name">—</div>
         <div id="hdr-ws-path" class="hdr-ws-path mono"></div>
         <div class="rail-status-row">
@@ -185,11 +190,21 @@
         <div id="browser-panel" class="browser-panel" hidden>
           <div class="browser-head">
             <span id="browser-path" class="browser-path mono" title="Current folder">…</span>
+            <button id="browser-new" class="btn btn-sm" type="button" title="Create a folder here">＋ New folder</button>
             <button id="browser-use" class="btn btn-accent btn-sm" type="button">Use this folder</button>
+          </div>
+          <div id="browser-new-row" class="browser-new-row" hidden>
+            <input id="browser-new-name" type="text" autocomplete="off" spellcheck="false" placeholder="my-new-project" aria-label="New folder name">
+            <button id="browser-new-create" class="btn btn-accent btn-sm" type="button">Create</button>
+            <button id="browser-new-cancel" class="btn btn-sm" type="button">Cancel</button>
           </div>
           <div id="browser-error" class="form-error" hidden></div>
           <div id="browser-list" class="browser-list"></div>
         </div>
+        <fieldset class="field">
+          <legend class="field-label">Planet colour</legend>
+          <div id="create-hue" class="hue-row" role="radiogroup" aria-label="Planet colour"></div>
+        </fieldset>
         <fieldset class="field">
           <legend class="field-label">Roles &amp; models</legend>
           <div id="create-roles" class="role-rows"></div>
@@ -229,7 +244,13 @@
           <div id="settings-browser-panel" class="browser-panel" hidden>
             <div class="browser-head">
               <span id="settings-browser-path" class="browser-path mono" title="Current folder">…</span>
+              <button id="settings-browser-new" class="btn btn-sm" type="button" title="Create a folder here">＋ New folder</button>
               <button id="settings-browser-use" class="btn btn-accent btn-sm" type="button">Use this folder</button>
+            </div>
+            <div id="settings-browser-new-row" class="browser-new-row" hidden>
+              <input id="settings-browser-new-name" type="text" autocomplete="off" spellcheck="false" placeholder="my-new-project" aria-label="New folder name">
+              <button id="settings-browser-new-create" class="btn btn-accent btn-sm" type="button">Create</button>
+              <button id="settings-browser-new-cancel" class="btn btn-sm" type="button">Cancel</button>
             </div>
             <div id="settings-browser-error" class="form-error" hidden></div>
             <div id="settings-browser-list" class="browser-list"></div>
@@ -244,6 +265,10 @@
             <input id="settings-tools" type="text" autocomplete="off"
                    placeholder="Comma-separated, e.g. DesignSync, WebFetch">
           </label>
+          <fieldset class="field">
+            <legend class="field-label">Planet colour</legend>
+            <div id="settings-hue" class="hue-row" role="radiogroup" aria-label="Planet colour"></div>
+          </fieldset>
           <fieldset class="field">
             <legend class="field-label">Roles</legend>
             <div id="settings-roles" class="settings-roles"></div>

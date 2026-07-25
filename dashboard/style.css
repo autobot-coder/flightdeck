@@ -1397,6 +1397,11 @@ body.panel-collapsed .panel-resize { display: none; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* .create-body is a flex column inside a height-constrained, scrolling .modal-body, so its
+     children are shrinkable by default. Every other field resists via intrinsic content height;
+     this one has overflow:hidden and collapsed to its 2px of border instead — the folder browser
+     opened but rendered as a hairline. Keep its natural height and let the modal body scroll. */
+  flex: none;
 }
 .browser-panel[hidden] { display: none; }
 .browser-head {
@@ -1405,6 +1410,61 @@ body.panel-collapsed .panel-resize { display: none; }
   gap: 9px;
   padding: 8px 10px;
   border-bottom: 1px solid var(--brd-soft);
+}
+
+/* New-folder row: appears under the browser head when ＋ New folder is pressed. */
+.browser-new-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--brd-soft);
+}
+.browser-new-row[hidden] { display: none; }
+.browser-new-row input {
+  flex: 1;
+  min-width: 0; /* let it shrink inside the flex row instead of forcing overflow */
+}
+
+/* Planet colour picker — swatches for the universe view's orb hue. */
+.hue-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.hue-swatch {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--brd);
+  border-radius: 50%;
+  background: none;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.hue-swatch span {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: block;
+}
+.hue-swatch:hover { transform: scale(1.08); }
+/* Selection is a ring, not colour alone — the swatches differ only by hue. */
+.hue-swatch.is-on {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 3px var(--cyan-ghost);
+}
+.hue-swatch:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+/* Back + Deploy sit on one row at the top of the workspace rail. */
+.rail-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .browser-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--dim); }
 .browser-list { max-height: 200px; overflow-y: auto; }

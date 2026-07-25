@@ -12,6 +12,11 @@ export interface WorkspaceConfig {
   extraAllowedTools?: string[];
   /** Context-size threshold (tokens) that triggers succession. */
   contextLimit?: number;
+  /**
+   * Planet colour on the universe view, as an HSL hue 0-359. Omit to derive one from the
+   * workspace id, which is what every workspace did before this was selectable.
+   */
+  hue?: number;
 }
 
 export interface RoleConfig {
