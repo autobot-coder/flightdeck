@@ -17,40 +17,41 @@ Only proceed if this is an interactive session started directly by the user (no 
 
 Work from the project root — the directory containing `flightdeck.config.json` and `bin/server.sh`.
 
-1. **Resolve the port** from config — don't hardcode it:
-   ```bash
-   PORT=$(node -p "require('./flightdeck.config.json').port")
-   ```
-   The examples below use $PORT; keep that substitution (or re-resolve it) in every command you run.
+**Use the managed launcher — do not hand-roll the stop/start.** It already resolves the port
+from config, stops gracefully with SIGINT so the orchestrator shuts its agent children down
+cleanly, escalates only if that fails, starts detached, polls until the server answers, and
+opens the browser. Reimplementing that in shell is how this skill became macOS-only.
 
-2. **Check for a running server** (note: this can print MULTIPLE pids):
-   ```bash
-   lsof -nP -iTCP:$PORT -sTCP:LISTEN -t
-   ```
-   - No output → nothing running, skip to step 4.
+1. **Restart** (this is stop + start; safe when nothing is running):
 
-3. **Stop every listed pid gracefully** (SIGINT is the equivalent of Ctrl-C — the orchestrator needs it to shut down its agent children cleanly):
-   ```bash
-   for pid in $(lsof -nP -iTCP:$PORT -sTCP:LISTEN -t); do kill -INT "$pid"; done
-   ```
-   Poll for up to ~10 seconds until every pid is gone (kill -0 "$pid" fails). If any survive, escalate once to kill -TERM and poll again. **Never** start with kill -9; only use it as a last resort if TERM also fails, and say so in your summary. Note: if the server was started in a visible terminal window, that terminal's process will simply exit — that's expected.
+   - **macOS / Linux:**
+     ```bash
+     ./bin/server.sh restart
+     ```
+   - **Windows** (cmd or PowerShell):
+     ```
+     bin\server.cmd restart
+     ```
 
-4. **Start the server DETACHED** so it outlives this Claude Code session — do NOT use the Bash tool's run_in_background for the server itself (a background shell dies when this session ends, and the whole agent fleet with it):
-   ```bash
-   nohup npm run start > /tmp/flightdeck.log 2>&1 & disown
-   ```
-   Then poll until it's up (up to ~30 seconds):
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}" "http://localhost:$PORT/"
-   ```
-   Success = 200. If it never comes up, read /tmp/flightdeck.log and report the error instead of continuing.
+   The launcher prints what it did and exits non-zero if the server never came up.
 
-5. **Open the dashboard:**
-   ```bash
-   open "http://localhost:$PORT"
-   ```
+2. **If it refuses to stop**, it will say the port is held by something that is not this
+   Flightdeck, and print the offending process. That is deliberate — it will not kill an
+   unrelated program. Either free the port yourself, change `port` in `flightdeck.config.json`,
+   or, if you are certain, re-run with `--force`.
 
-6. **Tell the user:** (a) if they already had a dashboard tab open, that tab must be **hard-refreshed** (Cmd+Shift+R) — the SPA never re-fetches app.js on its own, so an old tab keeps running stale code even after a server restart; (b) the server is detached from this session (logs at /tmp/flightdeck.log) and keeps running after they close this Claude Code window.
+3. **If it never comes up**, read the log the launcher names (`/tmp/flightdeck.log` on
+   macOS/Linux, `flightdeck.log` in the project root on Windows) and report the error rather
+   than retrying blindly.
+
+4. **Open the dashboard** if the launcher did not (it opens one for you on `start`):
+   `http://localhost:<port>` — the launcher prints the resolved URL.
+
+5. **Tell the user:** (a) if they already had a dashboard tab open, that tab must be
+   **hard-refreshed** — <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> on macOS,
+   <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> on Windows/Linux — because the SPA never
+   re-fetches `app.js` on its own and an old tab keeps running stale code after a restart;
+   (b) the server is detached from this session and keeps running after they close this window.
 
 ## Notes
 

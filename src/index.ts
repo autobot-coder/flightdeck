@@ -5,7 +5,7 @@ import { ConfigStore, ensureConfigFile } from './config.js';
 import { openDb, Store } from './db.js';
 import { shutdownActiveTurns } from './orchestrator/session.js';
 import { Supervisor } from './orchestrator/supervisor.js';
-import { formatPreflight, preflight } from './preflight.js';
+import { formatPreflight, MIN_NODE_MAJOR, preflight } from './preflight.js';
 import { startServer } from './server/index.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -42,6 +42,20 @@ fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 const report = await preflight(config.cliPath);
 const banner = formatPreflight(report);
 if (banner) console.log(banner);
+
+// An unsupported Node used to print "✗ Node 18 is too old" and then start anyway, so the very
+// next lines said the app was up. package.json declares engines >=20 but npm only warns, and
+// better-sqlite3 resolves a Node 18 prebuild, so nothing else fails loudly — the user gets a
+// half-working install and a contradictory transcript. Refuse instead: a clear stop is kinder
+// than a server that runs until something subtler breaks. FLIGHTDECK_SKIP_NODE_CHECK=1 is the
+// escape hatch for anyone who has measured their runtime and disagrees.
+if (!report.node.ok && process.env.FLIGHTDECK_SKIP_NODE_CHECK !== '1') {
+  fail(
+    `✗ Refusing to start on Node ${report.node.version} — Flightdeck needs Node ${MIN_NODE_MAJOR}+.`,
+    `  Install the current LTS from https://nodejs.org, then run \`npm install\` again.`,
+    `  To start anyway (unsupported), set FLIGHTDECK_SKIP_NODE_CHECK=1.`,
+  );
+}
 
 for (const ws of config.workspaces) {
   if (!fs.existsSync(ws.path)) {

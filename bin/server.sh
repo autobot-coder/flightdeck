@@ -20,16 +20,58 @@ listening_pids() {
   lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true
 }
 
+# Is this pid OUR server, rather than whatever else happens to hold the port?
+#
+# The server runs as `node … <PROJECT_ROOT>/node_modules/tsx/… src/index.ts`, so its command
+# line always carries the project root. Without this check `stop` killed any listener and
+# reported "✓ stopped cleanly" — an unrelated program on the configured port was terminated
+# and the user was told their server had shut down.
+#
+# Deliberately matches on the process, NOT on liveness: a wedged server that no longer answers
+# HTTP still has the right command line, so the SIGTERM/SIGKILL escalation below is unaffected.
+# That was the stated reason a naive "is it responding?" guard would have been worse than none.
+is_ours() {
+  local cmd
+  cmd=$(ps -o command= -p "$1" 2>/dev/null) || return 1
+  # BOTH conditions: the project root AND our entry point. Matching the root alone is too
+  # loose — any unrelated script living inside the project directory would pass, which is
+  # exactly how the first version of this guard let a foreign listener through.
+  case "$cmd" in
+    *"$PROJECT_ROOT"*) : ;;
+    *) return 1 ;;
+  esac
+  case "$cmd" in
+    *src/index.ts*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 is_up() {
   [ "$(curl -s -o /dev/null -w '%{http_code}' "$URL/" 2>/dev/null)" = "200" ]
 }
 
 do_stop() {
-  local pids
+  local pids foreign
   pids=$(listening_pids)
   if [ -z "$pids" ]; then
     echo "  (nothing running on port $PORT)"
     return 0
+  fi
+
+  # Refuse to kill somebody else's process. Reported per-pid because the honest failure here
+  # is "your port is taken", which is actionable, where a silent kill was not.
+  foreign=""
+  for pid in $pids; do
+    is_ours "$pid" || foreign="$foreign $pid"
+  done
+  if [ -n "$foreign" ] && [ "$FORCE" != "1" ]; then
+    echo "  ✗ refusing to stop: port $PORT is held by a process that is not this Flightdeck."
+    for pid in $foreign; do
+      echo "      pid $pid: $(ps -o command= -p "$pid" 2>/dev/null | cut -c1-100)"
+    done
+    echo "    This is not $PROJECT_ROOT. Change \"port\" in flightdeck.config.json, stop that"
+    echo "    process yourself, or re-run with --force if you are certain."
+    return 1
   fi
 
   # SIGINT == Ctrl-C: lets the orchestrator shut its agent children down cleanly.
@@ -84,6 +126,14 @@ do_start() {
   return 1
 }
 
+# --force may appear anywhere; strip it so the command word keeps its position.
+FORCE=0
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--force" ] || [ "$a" = "-f" ]; then FORCE=1; else ARGS+=("$a"); fi
+done
+set -- "${ARGS[@]:-}"
+
 case "${1:-restart}" in
   start)
     if is_up; then
@@ -126,6 +176,11 @@ Commands:
   status     Is it running?
   logs       Tail $LOG_FILE
   help       This message
+
+Options:
+  --force    Let stop/restart kill a listener that is NOT this Flightdeck.
+             Without it, stop refuses rather than terminating an unrelated
+             process that happens to hold port $PORT.
 EOF
     ;;
 esac
