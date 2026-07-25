@@ -113,6 +113,11 @@ const FIXTURE = join(WORK, 'historic.db');
 seedHistoric(FIXTURE);
 
 // ---------------------------------------------------------------- A
+// ⚠️ LOAD-BEARING — DO NOT DELETE. reviewer-1 attacked this deliberately by drifting the fixture
+// forward (adding total_input_tokens to the raw CREATE TABLE above, as a careless edit would):
+// section A failed with the offending column list, and 17 of the 18 assertions STILL PASSED. On a
+// modern fixture migrate() has nothing to do, so everything downstream goes green while proving
+// nothing. This section is the only thing between this gate and vacuity.
 console.log('A. the fixture really is PRE-migration (if this fails, nothing below means anything)');
 read(FIXTURE, (db) => {
   ok('agents has NO total_input_tokens column yet',
@@ -142,8 +147,14 @@ read(FIXTURE, (db) => {
 
 // ---------------------------------------------------------------- C
 // Ruling #15's addendum: the recompute must run on EVERY open, not once. A server still on
-// pre-column code keeps writing turns without accumulating, so a one-shot backfill freezes
-// stale. This is the assertion a one-shot implementation fails.
+// pre-column code keeps writing turns without accumulating, so a one-shot backfill freezes stale.
+//
+// ⚠️ LOAD-BEARING — DO NOT DELETE. This single assertion is the ONLY coverage of that addendum.
+// Verified twice by converting migrate() back to a one-shot backfill (recompute moved inside the
+// column-missing guard, tsc-clean so a realistic regression rather than broken code): exactly ONE
+// failure, "expected 1333, got 333". Remove this section and the gate still reads as thorough at
+// 17 assertions while being blind to the precise defect the addendum was written to fix — silently
+// frozen token totals.
 console.log('\nC. the recompute runs on every open, not once (the one-shot-backfill defect)');
 {
   const w = new Database(FIXTURE);
