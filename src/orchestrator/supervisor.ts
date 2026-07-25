@@ -23,6 +23,13 @@ const MAX_UNSEEN_IN_PROMPT = 15;
 /** Cap on review-queue tasks listed in one prompt — same purpose, same budget. */
 const MAX_REVIEW_IN_PROMPT = 10;
 
+/** A dispatchable turn: the prompt, and how far its mail section actually reached. */
+interface PendingWork {
+  prompt: string;
+  /** Highest message id shown to the agent, so the cursor never skips undelivered mail. */
+  deliveredThrough: number;
+}
+
 export class Supervisor {
   /** Set once at boot from preflight, so every turn spawns the CLI the same resolved way. */
   cli: CliResolution | null = null;
@@ -122,7 +129,7 @@ export class Supervisor {
     try {
       // Gather ready candidates per workspace, then dispatch round-robin across
       // workspaces (with a rotating start) so a busy workspace can't starve the others.
-      const queues: { ws: WorkspaceConfig; roleCfg: RoleConfig; agent: AgentRow; work: string }[][] = [];
+      const queues: { ws: WorkspaceConfig; roleCfg: RoleConfig; agent: AgentRow; work: PendingWork }[][] = [];
       for (const ws of this.config.workspaces) {
         if (!this.store.isRunning(ws.id)) continue;
         const q: (typeof queues)[number] = [];
@@ -159,8 +166,10 @@ export class Supervisor {
     }
   }
 
-  private pendingWork(ws: WorkspaceConfig, agent: AgentRow): string | null {
+  private pendingWork(ws: WorkspaceConfig, agent: AgentRow): PendingWork | null {
     const last = this.lastTurnAt.get(agent.id) ?? 0;
+    // Highest message id actually put in front of the agent; 0 = none delivered this turn.
+    let deliveredThrough = 0;
     if (Date.now() - last < this.config.tickSeconds * 1000) return null; // one turn per tick per agent
 
     // Two wake predicates, named once. `isFresh` = changed since this agent last ran;
@@ -168,7 +177,21 @@ export class Supervisor {
     // queue uses IS the policy, so every queue below states its choice explicitly rather than
     // encoding it in whichever characters happened to be typed.
     const isFresh = (t: TaskRow) => t.updated_at > last;
-    const isStale = (t: TaskRow) => Date.now() - t.updated_at > STALE_TASK_MS;
+    // The `now - last` clause is what bounds re-notification. Without it a task that goes stale
+    // is stale FOREVER — `updated_at` never moves, so the predicate stays true and the agent is
+    // re-dispatched on every single tick. That is a burn loop identical to the one this whole
+    // change removes. With it, a stale nudge can only fire once per STALE_TASK_MS per agent.
+    const isStale = (t: TaskRow) =>
+      Date.now() - t.updated_at > STALE_TASK_MS && Date.now() - last > STALE_TASK_MS;
+
+    // Triage work (inbox, blocked) is the lead's, but a workspace need not have a lead — the
+    // roles route accepts any subset of KNOWN_ROLES. Fall back to the first configured role the
+    // way postGoal does, otherwise a lead-less team strands every blocked and inbox task with
+    // no wake path at all and the board stops silently.
+    const triageRole = ws.roles.find((r) => r.role === 'lead')?.role ?? ws.roles[0]?.role ?? null;
+    // Likewise: review is the reviewer's, falling back to the lead/first role so a team with no
+    // reviewer does not silently re-create the unreachable review column this change fixed.
+    const reviewRole = ws.roles.find((r) => r.role === 'reviewer')?.role ?? triageRole;
 
     /** A status queue that can wake `role`. `null` role means "whoever the task is assigned to". */
     const queue = (role: string | null, status: TaskStatus, wakesOn: (t: TaskRow) => boolean) => {
@@ -179,6 +202,9 @@ export class Supervisor {
         .filter((t) => (role === null ? t.assignee_role === agent.role : true) && wakesOn(t));
     };
 
+    // Needed before the gate now: owner mail is itself a wake signal (see `ownerMail` below),
+    // so this can no longer be deferred until after we know we are running.
+    const unseen = this.store.unseenMessages(agent);
     const inProgress = this.store.listTasks(ws.id, 'in_progress').filter((t) => t.assignee_role === agent.role);
     const freshInProgress = inProgress.filter(isFresh);
     const staleInProgress = inProgress.filter(isStale);
@@ -192,15 +218,22 @@ export class Supervisor {
       // `review` is the reviewer's work regardless of assignee_role, which records who
       // IMPLEMENTED it — moving a task to review is how the protocol hands it over. Nothing
       // dispatched this status before, so the column was unreachable.
-      review: queue('reviewer', 'review', (t) => isFresh(t) || isStale(t)),
+      review: queue(reviewRole, 'review', (t) => isFresh(t) || isStale(t)),
       // The lead's job is not only decomposing goals — it triages untriaged work and unblocks
       // people, and neither arrives as a task assigned to it. Without these two the lead would
       // wake for its own todos and nothing else, and the role would be pointless.
-      inbox: queue('lead', 'inbox', (t) => isFresh(t) || isStale(t)),
-      // FRESH ONLY, deliberately — note the missing isStale. A blocked task wakes the lead once,
-      // when it becomes blocked. If the lead cannot clear it the decision is the owner's, and
-      // re-firing on the stale timer would have the lead relitigate it every 30 minutes forever.
-      blocked: queue('lead', 'blocked', isFresh),
+      inbox: queue(triageRole, 'inbox', (t) => isFresh(t) || isStale(t)),
+      // Fresh, plus a bounded re-notify. Fresh alone loses the blocker entirely if the lead's
+      // one dispatch fails: lastTurnAt is stamped at turn START and never rolled back, so a
+      // crashed or timed-out turn leaves updated_at < last forever and the blocker is surfaced
+      // ZERO times. isStale is now self-limiting (see above), so this re-offers a still-blocked
+      // task at most once per STALE_TASK_MS rather than every tick.
+      blocked: queue(triageRole, 'blocked', (t) => isFresh(t) || isStale(t)),
+      // Mail from the OWNER wakes agents; mail from other agents does not. The loop this change
+      // removes was agent-to-agent, and suppressing everything took the dashboard Comms composer
+      // down with it — the owner could type an instruction, be told it was sent, and have nothing
+      // ever happen. A human addressing the fleet is a real work signal.
+      ownerMail: unseen.filter((m) => m.from_agent === ownerIdFrom(this.config)),
       freshInProgress,
       staleInProgress,
     };
@@ -213,24 +246,26 @@ export class Supervisor {
     // wakes them, and it is visible to the owner on the board.
     if (Object.values(queues).every((q) => q.length === 0)) return null;
 
-    // Read AFTER the gate: mail no longer decides whether we run, and unseenMessages is a
-    // SELECT * over full bodies. Fetching it first meant every idle tick — now the common
-    // case — loaded and discarded the whole backlog.
-    const unseen = this.store.unseenMessages(agent);
     const { todo, review: reviewQueue, inbox: inboxQueue, blocked: blockedQueue } = queues;
 
     const parts: string[] = [];
     if (unseen.length > 0) {
-      // Capped: mail no longer wakes anyone, so a quiet spell can leave a long backlog for
-      // whichever turn comes next. Take the most recent — older narration is the least useful
-      // and the cursor advances past all of it regardless — and say what was dropped rather
-      // than silently truncating.
-      const shown = unseen.slice(-MAX_UNSEEN_IN_PROMPT);
-      const dropped = unseen.length - shown.length;
+      // Cap from the OLDEST end, and record how far we actually delivered so runAgentTurn can
+      // advance the cursor to exactly that point and no further.
+      //
+      // Taking the NEWEST N was doubly wrong: the cursor advanced past the whole backlog
+      // regardless, so anything trimmed was marked seen and became unreadable by any tool — and
+      // the oldest unread message is precisely a successor's handoff brief, the one thing
+      // succession() goes out of its way to deliver. A 15-message backlog would have destroyed
+      // the brief and started the new generation blind. Oldest-first plus a truthful cursor
+      // means an over-long backlog is deferred, never lost.
+      const shown = unseen.slice(0, MAX_UNSEEN_IN_PROMPT);
+      const deferred = unseen.length - shown.length;
+      deliveredThrough = shown[shown.length - 1].id;
       parts.push(
-        `New messages on the bus${dropped > 0 ? ` (${unseen.length} unread, showing the ${shown.length} most recent)` : ''}:\n` +
+        `New messages on the bus${deferred > 0 ? ` (${unseen.length} unread, showing the ${shown.length} oldest)` : ''}:\n` +
           shown.map((m) => `- [${m.id}] from ${m.from_agent} to ${m.to_role ?? 'all'}${m.task_id ? ` (task ${m.task_id})` : ''}: ${m.body}`).join('\n') +
-          (dropped > 0 ? `\n(${dropped} older message(s) not shown — ask on the bus if you need them.)` : ''),
+          (deferred > 0 ? `\n(${deferred} newer message(s) held for your next turn — nothing is lost.)` : ''),
       );
     }
     if (inboxQueue.length > 0) {
@@ -271,28 +306,35 @@ export class Supervisor {
           staleInProgress.map((t) => `- [${t.id}] ${t.title}`).join('\n'),
       );
     }
-    if (parts.length === 0 && freshInProgress.length > 0) {
+    // Unconditional: this is often the ONLY reason the agent was woken (the reviewer bounces a
+    // task back to in_progress, which the role prompt says is what re-wakes the builder). Gating
+    // it on 'nothing else rendered' meant one unrelated unread broadcast hid the task entirely.
+    if (freshInProgress.length > 0) {
       parts.push(
         'Your in_progress tasks were updated:\n' + freshInProgress.map((t) => `- [${t.id}] ${t.title}`).join('\n'),
       );
     }
     parts.push(
       'Work now. Move tasks you start to in_progress and tasks you finish to review (or done for trivial fixes). ' +
-        'Coordinate via bus_post_message; create follow-up tasks with bus_create_task. End your turn when this batch of work is done or genuinely blocked.',
+        'To get another role to do something, create a task for them with bus_create_task — that is what wakes them; a message will not. ' +
+        'If you are stuck, set the task to blocked and put the whole question in its description. ' +
+        'End your turn when this batch of work is done or genuinely blocked.',
     );
-    return parts.join('\n\n');
+    return { prompt: parts.join('\n\n'), deliveredThrough };
   }
 
-  private async runAgentTurn(ws: WorkspaceConfig, roleCfg: RoleConfig, agent: AgentRow, prompt: string) {
+  private async runAgentTurn(ws: WorkspaceConfig, roleCfg: RoleConfig, agent: AgentRow, work: PendingWork) {
     this.lastTurnAt.set(agent.id, Date.now());
-    const maxMsgIdAtStart = this.maxMessageId(ws.id);
     const deps: TurnDeps = { store: this.store, dbPath: this.config.dbPath, onEvent: this.onEvent, cli: this.cli ?? undefined };
-    const result = await runTurn(deps, ws, agent, this.systemPrompt(ws, roleCfg, agent), prompt);
+    const result = await runTurn(deps, ws, agent, this.systemPrompt(ws, roleCfg, agent), work.prompt);
 
-    // Messages included in this prompt are delivered even if the agent never called bus_read_messages.
+    // Advance only as far as the prompt actually reached. This used to jump to the workspace's
+    // max message id, which marked everything seen — including mail the prompt's cap had
+    // trimmed and anything posted DURING the turn. unseenMessages only ever returns id > cursor,
+    // so those messages became permanently unreadable by any tool.
     const fresh = this.store.getAgent(agent.id);
-    if (fresh && fresh.last_seen_message_id < maxMsgIdAtStart) {
-      this.store.updateAgent(agent.id, { last_seen_message_id: maxMsgIdAtStart });
+    if (fresh && work.deliveredThrough > fresh.last_seen_message_id) {
+      this.store.updateAgent(agent.id, { last_seen_message_id: work.deliveredThrough });
     }
 
     const limit = contextLimitFor(agent.model, ws.contextLimit);

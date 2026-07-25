@@ -1616,9 +1616,12 @@ function renderAll() {
  * and the decision being asked of the owner is usually near the end. Everything is already
  * on the client, so this needs no fetch.
  */
+let modalGeneration = 0; // bumped by every opener; a stale in-flight fetch must not paint
+
 function openTaskModal(taskId) {
   const t = (state.tasks || []).find((x) => x && x.id === taskId);
   if (!t) return;
+  modalGeneration += 1;
   $('#modal-title').textContent = t.title || '(untitled)';
   // Same chips as the board card, plus the two only the detail view shows.
   const meta =
@@ -1646,9 +1649,14 @@ async function openAgentModal(agentId) {
     : 'Turn history';
   $('#modal-body').innerHTML = '<div class="feed-empty">Loading…</div>';
   $('#modal-backdrop').hidden = false;
+  const generation = ++modalGeneration;
 
   const turns = await api('/api/agents/' + encodeURIComponent(agentId) + '/turns');
-  if ($('#modal-backdrop').hidden) return; // closed while loading
+  // Bail if ANY other opener has claimed the shared modal since this fetch started. Checking
+  // only `hidden` was not enough: closing this modal and opening a task detail before the
+  // response landed left the backdrop open, so turn history painted over the task description
+  // while the title still read the task name.
+  if (generation !== modalGeneration || $('#modal-backdrop').hidden) return;
   if (!Array.isArray(turns)) {
     $('#modal-body').innerHTML = '<div class="feed-empty">Could not load turn history.</div>';
     return;
