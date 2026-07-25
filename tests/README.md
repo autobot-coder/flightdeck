@@ -32,6 +32,7 @@ counted as passes — a run that skipped something must not read as full coverag
 | `ownerid-test.mts` | author id/display name derived for the human |
 | `dbmig-test.mts` | `openDb()`'s migration path: a database written by older code keeps every row, and `total_input_tokens` is re-derived from `turns` on **every** open |
 | `db-allowlist-test.mts` | `updateTask`/`updateAgent` interpolate column names, so only allowlisted columns may be written — no mass-assignment, no column-name SQL injection |
+| `mkdir-hue-test.mts` | `POST /api/mkdir` cannot create a directory outside its `parent`, and `hue` is always stored as an integer 0-359 |
 
 ## Two things to know before changing anything here
 
