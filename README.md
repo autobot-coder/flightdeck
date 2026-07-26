@@ -4,6 +4,22 @@ A local orchestrator + dashboard for running **teams of autonomous Claude agents
 
 Everything runs on your own machine. There is no hosted service, no account to create, and no telemetry — the dashboard is a local web page talking to a local process, and all state lives in a SQLite file you can delete.
 
+![Flightdeck in motion — the universe view, a workspace board, and a blocked task opened](docs/screenshots/demo.gif)
+
+<sub>Every project you add becomes a world, and the dots orbiting it are its agents — green while working, blue when idle. Click a world to drop into its board.</sub>
+
+---
+
+## What it looks like
+
+**The board.** Each workspace has a task board, its team down the left with live context and turn counts, and the bus on the right. You set a directive at the bottom; the lead decomposes it into tasks and the team picks them up.
+
+![A workspace board with tasks, the agent roster, and live bus messages](docs/screenshots/02-board.png)
+
+**Blocked work comes to you.** When an agent hits something only you can decide, it leaves the task in `blocked` and writes down what it needs. Click any task to read the whole thing — no digging through logs.
+
+![A blocked task expanded, showing the decision the lead needs from you](docs/screenshots/03-blocked.png)
+
 ---
 
 ## Quick start
