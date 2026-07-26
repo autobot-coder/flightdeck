@@ -52,34 +52,13 @@ On first run Flightdeck creates your own `flightdeck.config.json` from `flightde
 
 ## How it works
 
-```
-┌─────────────────────────── Flightdeck (this repo) ───────────────────────────┐
-│                                                                                   │
-│  Dashboard (localhost:4400) ── Fastify REST + WebSocket ──┐                       │
-│                                                           │                       │
-│  Supervisor loop ── every tick, gives idle agents a turn  │                       │
-│      │               when they have unread messages or    │                       │
-│      │               assigned tasks                       │                       │
-│      ▼                                                    ▼                       │
-│  claude -p --resume <session> ◄──────────────► SQLite (tasks, messages,           │
-│      │  headless session per agent,            events, turns, agents)             │
-│      │  runs in the project's directory              ▲                            │
-│      └── flightdeck-bus MCP server ─────────────────────┘                            │
-│          (bus_post_message, bus_create_task, bus_update_task, …)                  │
-└───────────────────────────────────────────────────────────────────────────────────┘
-```
+A supervisor loop runs in this process. Every tick it looks at each workspace's board and gives a turn to any idle agent that has work — spawning `claude -p --resume` in that project's directory. Agents talk to each other and to the board through an MCP server (`flightdeck-bus`) that writes to a single SQLite file, which is also what the dashboard reads over REST and a WebSocket.
 
 - **Turns, not daemons**: an agent's "session" is a persistent claude conversation; the supervisor wakes it with `--resume` when the **board** has work for it — a todo assigned to its role, its own unfinished in-progress task, the reviewer's review column, or the lead's inbox and newly-blocked queues. Idle teams cost nothing, and an empty board really is silent.
 - **Messages never wake anyone**: bus mail is context, not a trigger. It is delivered alongside the next turn the board justifies. Waking on unread mail made chatter self-sustaining — every turn produces mail, which woke someone, who produced more — so an idle team never settled. To ask something of another role, **create a task for them**; that is what wakes them, and it is visible to you on the board.
-- **The bus is the only channel**: agents talk via MCP tools that write to SQLite, so every inter-agent message is durable, inspectable, and visible in the dashboard's Comms tab. You can speak on the bus too.
-- **Session succession**: when a session's context estimate nears its model's window, the supervisor has it write a handoff brief to the bus, retires it, and spins up the next generation (`builder-2`), which inherits the brief as its first unread message. Thresholds are model-aware: 900k for the 1M-window models (fable, opus, sonnet), 180k for haiku (200k window). Set `contextLimit` on a workspace to override.
+- **The bus is the only channel**: there is no side channel between agents, so every message they exchange is durable, inspectable, and visible in the dashboard's Comms tab. You can speak on the bus too.
+- **Session succession**: when a session's context nears its model's window, the supervisor has it write a handoff brief to the bus, retires it, and spins up the next generation (`builder-2`), which inherits that brief as its first unread message. Long-running work survives the context limit instead of hitting a wall.
 - **Subscription auth**: sessions run through your logged-in `claude` CLI — no separate API bill, no API key to paste anywhere.
-
-### Does it work with OpenAI?
-
-**No — Claude only, today.** Flightdeck does not call a model API directly; it drives the **Claude Code CLI** as a child process and depends on CLI-specific features (`--append-system-prompt`, MCP server injection for the bus, `--permission-mode`, `--allowedTools`, and stream-json turn telemetry). There is no OpenAI equivalent to point it at, so supporting another provider means writing a second orchestrator backend, not flipping a setting.
-
-The binary Flightdeck spawns *is* configurable via `cliPath`, so a CLI-compatible shim can be substituted — but nothing of that kind ships here, and none is endorsed. If you build one, it must accept the same flags and emit the same stream-json events.
 
 ---
 
@@ -111,6 +90,8 @@ Your settings live in `flightdeck.config.json` in the repo root. It is **gitigno
 | `cliPath` | Full path to the Claude CLI. Omit to auto-detect. Can also be set per-shell with `FLIGHTDECK_CLI` — see [Environment](#environment). |
 | `models[]` | Optional. The exact models offered in every dropdown, and the allow-list the API validates against. |
 | `workspaces[]` | Your projects: `id`, `name`, `path`, `roles[]` (each `role`, `model`, `prompt`), optional `contextLimit`, `allowedTools`, `extraAllowedTools`. |
+
+`contextLimit` is the threshold at which an agent hands over to its successor (see [Session succession](#how-it-works)). Leave it unset and it is chosen from the model's window: **900k** for the 1M-window models (`fable`, `opus`, `sonnet`) and **180k** for `haiku` (200k window). Set it lower to force earlier, cheaper handovers.
 
 ### Models
 
@@ -235,6 +216,14 @@ Flightdeck avoids spawning the npm-global `claude.cmd` directly (Node refuses to
 - `data/flightdeck.db` — all state (gitignored); delete it to reset every team
 
 There is no build step. `npm start` runs TypeScript directly through `tsx`; `npm run typecheck` (`tsc --noEmit`) is the whole compile check.
+
+---
+
+## Does it work with OpenAI?
+
+**No — Claude only, today.** Flightdeck does not call a model API directly; it drives the **Claude Code CLI** as a child process and depends on CLI-specific features (`--append-system-prompt`, MCP server injection for the bus, `--permission-mode`, `--allowedTools`, and stream-json turn telemetry). There is no OpenAI equivalent to point it at, so supporting another provider means writing a second orchestrator backend, not flipping a setting.
+
+The binary Flightdeck spawns *is* configurable via `cliPath`, so a CLI-compatible shim can be substituted — but nothing of that kind ships here, and none is endorsed. If you build one, it must accept the same flags and emit the same stream-json events.
 
 ---
 
