@@ -42,6 +42,17 @@ against *both* the fixed file and the pre-fix image proves nothing — it is not
 Do not delete the fixtures to "clean up", and do not point a harness at the current tree for both
 halves of a comparison.
 
+⚠️ `base31` is coupled to the **dependency tree**, not just to one file: `typesdev-test.mts` C4
+asserts the resolved package *set* is identical between it and the live lock ("a reclassification,
+not a re-resolve"). So any dependency upgrade that adds or removes a transitive package makes C4
+fail even though nothing is wrong with the upgrade. When that happens, regenerate the fixture —
+copy the current `package.json`/`package-lock.json`, move `@types/ws` back into `dependencies`,
+and strip the `dev` flag from `@types/ws`, `@types/node` and `undici-types`. Derive it from the
+live lock rather than re-running `npm install`, which would resolve fresh versions and change the
+very package set C4 is comparing. Then confirm the fixture still *discriminates* by running the
+harness against it directly (`npx tsx tests/typesdev-test.mts tests/fixtures/base31`) — that run
+is supposed to FAIL, and a fixture that passes it has stopped being a control.
+
 **2. A green suite is not proof the suite works.** These harnesses have been mutation-verified:
 revert the fix a gate covers, confirm the gate goes red, and **read the failure text** — a crash
 and a failed assertion both exit 1, and only one of them means what you want. One gate here scored

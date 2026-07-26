@@ -1,5 +1,5 @@
 {
-  "name": "mission-control",
+  "name": "flightdeck",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,13 +11,14 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node tests/run.mjs",
     "server:start": "bin/server.sh start",
     "server:stop": "bin/server.sh stop",
     "server:restart": "bin/server.sh restart",
     "server:status": "bin/server.sh status"
   },
   "dependencies": {
-    "@fastify/static": "^8.0.0",
+    "@fastify/static": "^10.1.2",
     "@fastify/websocket": "^11.0.0",
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@types/ws": "^8.18.1",
